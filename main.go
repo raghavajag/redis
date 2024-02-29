@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"net"
 	"os"
@@ -28,17 +27,24 @@ func main() {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
+	respReader := NewRESPReader(conn)
 	for {
-		msg, err := bufio.NewReader(conn).ReadString('\n')
+		commands, err := respReader.Read()
+		fmt.Printf("%v\n", commands)
+		result, err := handleCommand(commands)
 		if err != nil {
+			fmt.Println("Error handling command: ", err.Error())
 			return
 		}
-		msg = strings.Trim(msg, "\r\n")
-		fmt.Printf("Received data: %s\n", msg)
-
-		if err != nil {
-			fmt.Println("Error writing:", err.Error())
-			return
-		}
+		fmt.Printf("Write Command: %v", result)
+	}
+}
+func handleCommand(commands Value) (Value, error) {
+	cmds := commands.Array
+	switch strings.ToUpper(cmds[0].BulkString) {
+	case "PING":
+		return Value{Type: TypeString, String: "PONG"}, nil
+	default:
+		return Value{}, fmt.Errorf("command not found")
 	}
 }
