@@ -34,6 +34,7 @@ func main() {
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
 	respReader := NewRESPReader(conn)
+	respWriter := NewRESPWriter(conn)
 	for {
 		commands, err := respReader.Read()
 		if err != nil {
@@ -42,7 +43,7 @@ func handleConnection(conn net.Conn) {
 				return
 			}
 			fmt.Printf("Error reading command: %v\n", err)
-			continue
+			return
 		}
 		fmt.Printf("Received commands: %v\n", commands)
 
@@ -52,7 +53,7 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 		fmt.Printf("Sending response: %v\n", result)
-		_, err = conn.Write([]byte(result.String + "\r\n"))
+		err = respWriter.Write(result)
 		if err != nil {
 			fmt.Printf("Error writing response: %v\n", err)
 			return
