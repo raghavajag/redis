@@ -2,9 +2,15 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
+)
+
+const (
+	PING = "PING"
+	ECHO = "ECHO"
 )
 
 func main() {
@@ -30,20 +36,36 @@ func handleConnection(conn net.Conn) {
 	respReader := NewRESPReader(conn)
 	for {
 		commands, err := respReader.Read()
-		fmt.Printf("%v\n", commands)
+		if err != nil {
+			if err == io.EOF {
+				fmt.Println("Connection closed")
+				return
+			}
+			fmt.Printf("Error reading command: %v\n", err)
+			continue
+		}
+		fmt.Printf("Received commands: %v\n", commands)
+
 		result, err := handleCommand(commands)
 		if err != nil {
 			fmt.Println("Error handling command: ", err.Error())
 			return
 		}
-		fmt.Printf("Write Command: %v", result)
+		fmt.Printf("Sending response: %v\n", result)
+		_, err = conn.Write([]byte(result.String + "\r\n"))
+		if err != nil {
+			fmt.Printf("Error writing response: %v\n", err)
+			return
+		}
 	}
 }
 func handleCommand(commands Value) (Value, error) {
 	cmds := commands.Array
 	switch strings.ToUpper(cmds[0].BulkString) {
-	case "PING":
+	case PING:
 		return Value{Type: TypeString, String: "PONG"}, nil
+	case ECHO:
+		return Value{Type: TypeString, String: cmds[1].BulkString}, nil
 	default:
 		return Value{}, fmt.Errorf("command not found")
 	}

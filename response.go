@@ -113,7 +113,7 @@ func (r *RESPReader) Read() (Value, error) {
 	case ARRAY:
 		return r.readArray()
 	default:
-		return Value{}, fmt.Errorf("unknown type")
+		return Value{}, nil
 	}
 }
 
