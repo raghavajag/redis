@@ -7,10 +7,19 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
+	// Uncomment this block to pass the first stage
+	// "net"
+	// "os"
 )
 
+type V struct {
+	expiry    time.Duration
+	savedTime time.Time
+	value     string
+}
 type Store struct {
-	items map[string]string
+	items map[string]V
 	mux   sync.Mutex
 }
 
@@ -23,15 +32,14 @@ const (
 
 func main() {
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
-	store := Store{items: make(map[string]string)}
+	store := Store{items: make(map[string]V)}
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
-	fmt.Println("Listening on 6379...")
+
 	for {
 		conn, err := l.Accept()
-		fmt.Printf("Accepted connection %s \n", conn.RemoteAddr().String())
 		if err != nil {
 			fmt.Println("Error accepting connection: ", err.Error())
 			continue
@@ -39,7 +47,6 @@ func main() {
 		go handleConnection(conn, &store)
 	}
 }
-
 func handleConnection(conn net.Conn, store *Store) {
 	defer conn.Close()
 	respReader := NewRESPReader(conn)
@@ -67,20 +74,32 @@ func handleConnection(conn net.Conn, store *Store) {
 			return
 		}
 	}
-}
 
-func getHandler(store *Store, key string) Value {
+}
+func setHandlerWithExpiry(store *Store, key string, val string, expiry uint64) Value {
 	store.mux.Lock()
 	defer store.mux.Unlock()
-	val := store.items[key]
-	return Value{Type: TypeString, String: val}
+	store.items[key] = V{expiry: time.Duration(expiry), savedTime: time.Now(), value: val}
+	return Value{Type: TypeString, String: "OK"}
 }
 func setHandler(store *Store, key string, val string) Value {
 	fmt.Printf("key: %s val: %s\n", key, val)
 	store.mux.Lock()
 	defer store.mux.Unlock()
-	store.items[key] = val
+	store.items[key] = V{savedTime: time.Now(), value: val}
 	return Value{Type: TypeString, String: "OK"}
+}
+func getHandler(store *Store, key string) Value {
+	store.mux.Lock()
+	defer store.mux.Unlock()
+	val := store.items[key]
+	if time.Since(val.savedTime) > val.expiry {
+		delete(store.items, key)
+	}
+	if val.value == "" {
+		return Value{Type: TypeNullBulkString}
+	}
+	return Value{Type: TypeString, String: val.value}
 }
 func handleCommand(commands Value, store *Store) (Value, error) {
 	cmds := commands.Array
@@ -90,11 +109,17 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 	case ECHO:
 		return Value{Type: TypeString, String: cmds[1].BulkString}, nil
 	case SET:
-		return setHandler(store, cmds[1].BulkString, cmds[2].BulkString), nil
+		key := cmds[1].BulkString
+		val := cmds[2].BulkString
+		if len(cmds) == 4 {
+			exp := cmds[3].Number
+			return setHandlerWithExpiry(store, key, val, uint64(exp)), nil
+		}
+		return setHandler(store, key, val), nil
 	case GET:
-		return getHandler(store, cmds[1].BulkString), nil
+		key := cmds[1].BulkString
+		return getHandler(store, key), nil
 	default:
 		return Value{}, fmt.Errorf("command not found")
 	}
-
 }
