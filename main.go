@@ -70,7 +70,9 @@ func handleConnection(conn net.Conn, store *Store) {
 
 	for {
 		commands, err := respReader.Read()
-		fmt.Printf("Commands: %v\n", commands)
+		fmt.Println("Commands:")
+		printValue(commands, "  ")
+
 		if err != nil {
 			if err == io.EOF {
 				fmt.Println("Connection closed")
@@ -80,7 +82,8 @@ func handleConnection(conn net.Conn, store *Store) {
 			return
 		}
 		result, err := handleCommand(commands, store)
-		fmt.Printf("Response: %v\n", result)
+		fmt.Println("Response:")
+		printValue(result, "  ")
 		if err != nil {
 			fmt.Printf("Failed to handle command %s", err.Error())
 		}
@@ -162,5 +165,24 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 
 	default:
 		return Value{}, fmt.Errorf("command not found")
+	}
+}
+func printValue(v Value, indent string) {
+	fmt.Printf("%sType: %s\n", indent, v.Type)
+	if v.String != "" {
+		fmt.Printf("%sString: %q\n", indent, v.String)
+	}
+	if v.Number != 0 {
+		fmt.Printf("%sNumber: %d\n", indent, v.Number)
+	}
+	if v.BulkString != "" {
+		fmt.Printf("%sBulkString: %q\n", indent, v.BulkString)
+	}
+	if len(v.Array) > 0 {
+		fmt.Printf("%sArray:\n", indent)
+		for i, item := range v.Array {
+			fmt.Printf("%s  [%d]:\n", indent, i)
+			printValue(item, indent+"    ")
+		}
 	}
 }
