@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -13,14 +14,19 @@ import (
 	// "os"
 )
 
+type Config struct {
+	Dir        string
+	DBFilename string
+}
 type V struct {
 	expiry    time.Duration
 	savedTime time.Time
 	value     string
 }
 type Store struct {
-	items map[string]V
-	mux   sync.Mutex
+	items  map[string]V
+	mux    sync.Mutex
+	config Config
 }
 
 const (
@@ -31,8 +37,18 @@ const (
 )
 
 func main() {
+	config := Config{}
+
+	flag.StringVar(&config.Dir, "dir", "/tmp", "Directory for RDB file")
+	flag.StringVar(&config.DBFilename, "dbfilename", "dump.rdb", "RDB filename")
+	flag.Parse()
+
+	store := Store{
+		items:  make(map[string]V),
+		config: config,
+	}
+
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
-	store := Store{items: make(map[string]V)}
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
@@ -101,6 +117,25 @@ func getHandler(store *Store, key string) Value {
 	}
 	return Value{Type: TypeString, String: val.value}
 }
+func configGetHandler(store *Store, param string) Value {
+	var value string
+	switch strings.ToLower(param) {
+	case "dir":
+		value = store.config.Dir
+	case "dbfilename":
+		value = store.config.DBFilename
+	default:
+		return Value{Type: TypeArray, Array: []Value{}} // Empty array for unknown parameter
+	}
+
+	return Value{
+		Type: TypeArray,
+		Array: []Value{
+			{Type: TypeBulkString, BulkString: param},
+			{Type: TypeBulkString, BulkString: value},
+		},
+	}
+}
 func handleCommand(commands Value, store *Store) (Value, error) {
 	cmds := commands.Array
 	switch strings.ToUpper(cmds[0].BulkString) {
@@ -119,6 +154,12 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 	case GET:
 		key := cmds[1].BulkString
 		return getHandler(store, key), nil
+	case "CONFIG":
+		if len(cmds) < 3 || strings.ToUpper(cmds[1].BulkString) != "GET" {
+			return Value{}, fmt.Errorf("invalid CONFIG command")
+		}
+		return configGetHandler(store, cmds[2].BulkString), nil
+
 	default:
 		return Value{}, fmt.Errorf("command not found")
 	}
