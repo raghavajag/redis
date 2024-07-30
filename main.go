@@ -43,11 +43,18 @@ func NewStore(config Config) (*Store, error) {
 	}
 	defer rdbReader.Close()
 
-	// readDatabase
-	// load values from rdb to memory (items)
+	database, err := rdbReader.ReadDatabase()
+	if err != nil {
+		return nil, err
+	}
+
+	items := make(map[string]V)
+	for key, value := range database {
+		items[key] = V{value: value}
+	}
 
 	return &Store{
-		items:  make(map[string]V),
+		items:  items,
 		config: config,
 	}, nil
 }
