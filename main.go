@@ -36,6 +36,21 @@ const (
 	SET  = "SET"
 )
 
+func NewStore(config Config) (*Store, error) {
+	rdbReader, err := NewRDBReader(config.Dir, config.DBFilename)
+	if err != nil {
+		return nil, err
+	}
+	defer rdbReader.Close()
+
+	// readDatabase
+	// load values from rdb to memory (items)
+
+	return &Store{
+		items:  make(map[string]V),
+		config: config,
+	}, nil
+}
 func main() {
 	config := Config{}
 
@@ -43,9 +58,10 @@ func main() {
 	flag.StringVar(&config.DBFilename, "dbfilename", "dump.rdb", "RDB filename")
 	flag.Parse()
 
-	store := Store{
-		items:  make(map[string]V),
-		config: config,
+	store, err := NewStore(config)
+	if err != nil {
+		fmt.Printf("Failed to initialize store: %s\n", err)
+		os.Exit(1)
 	}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
@@ -60,7 +76,7 @@ func main() {
 			fmt.Println("Error accepting connection: ", err.Error())
 			continue
 		}
-		go handleConnection(conn, &store)
+		go handleConnection(conn, store)
 	}
 }
 func handleConnection(conn net.Conn, store *Store) {
