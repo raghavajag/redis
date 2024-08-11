@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -12,10 +14,11 @@ type RDBReader struct {
 }
 
 func NewRDBReader(dir, filename string) (*RDBReader, error) {
-	path := fmt.Sprintf("%s/%s", dir, filename)
+	path := fmt.Sprintf("./%s/%s", dir, filename)
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			fmt.Printf("File does not exist: %s\n", path)
 			return &RDBReader{file: nil, reader: nil}, nil // File doesn't exist, return empty reader
 		}
 		return nil, err
@@ -42,7 +45,7 @@ func (r *RDBReader) readHeader() error {
 		return err
 	}
 
-	if string(header) != "REDIS0007" {
+	if string(header) != "REDIS0012" {
 		return fmt.Errorf("invalid RDB file format")
 	}
 
@@ -52,27 +55,99 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 	if r.file == nil {
 		return make(map[string]string), nil // Empty database
 	}
-
 	err := r.readHeader()
 	if err != nil {
 		return nil, err
 	}
 
-	database := make(map[string]string)
+	// database := make(map[string]string)
 
 	for {
 		b, err := r.reader.ReadByte()
 		if err != nil {
 			return nil, err
 		}
-
+		fmt.Printf("Read byte: 0x%02X\n", b)
 		switch b {
+		case 0xFA:
+			fmt.Println("Metadata entry found")
+			metaKey, err := r.readString()
+			if err != nil {
+				fmt.Printf("Error reading metadata key: %v\n", err)
+				return nil, err
+			}
+			metaValue, err := r.readString()
+			if err != nil {
+				fmt.Printf("Error reading metadata value: %v\n", err)
+				return nil, err
+			}
+			fmt.Printf("Metadata: %s = %s\n", metaKey, metaValue)
 		case 0xFE: // Database selector
 		case 0xFB: // Hash table size info
 		case 0xFF: // End of file
-			return database, nil
+		case 0x00: // start of key value; load into db
 		default:
-			// Read key, value and expiry, and store in database map.
+			return nil, fmt.Errorf("unexpected byte: 0x%02X", b)
 		}
+	}
+}
+func (r *RDBReader) readString() (string, error) {
+	size, err := r.readSize()
+	if err != nil {
+		return "", err
+	}
+	fmt.Printf("String size: %d\n", size)
+
+	data := make([]byte, size)
+	_, err = io.ReadFull(r.reader, data)
+	if err != nil {
+		return "", err
+	}
+
+	return string(data), nil
+}
+
+/*
+00	The next 6 bits represent the length
+01	Read one additional byte. The combined 14 bits represent the length
+10	Discard the remaining 6 bits. The next 4 bytes from the stream represent the length
+11	The next object is encoded in a special format. The remaining 6 bits indicate the format.
+*/
+func (r *RDBReader) readSize() (uint64, error) {
+	b, err := r.reader.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+
+	fmt.Printf("Size encoding byte: 0x%02X\n", b)
+
+	switch b >> 6 {
+	case 0:
+		size := uint64(b & 0x3F)
+		fmt.Printf("6-bit size: %d\n", size)
+		return size, nil
+	case 1:
+		next, err := r.reader.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		size := (uint64(b&0x3F) << 8) | uint64(next)
+		fmt.Printf("14-bit size: %d\n", size)
+		return size, nil
+	case 2:
+		buf := make([]byte, 4)
+		_, err := io.ReadFull(r.reader, buf)
+		if err != nil {
+			return 0, err
+		}
+		size := uint64(binary.BigEndian.Uint32(buf))
+		fmt.Printf("32-bit size: %d\n", size)
+		return size, nil
+	case 3:
+		// This is a special encoding
+		// We'll handle this in readString
+		return 0, fmt.Errorf("special encoding")
+	default:
+		return 0, fmt.Errorf("invalid size encoding")
 	}
 }

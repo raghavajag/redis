@@ -9,9 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	// Uncomment this block to pass the first stage
-	// "net"
-	// "os"
 )
 
 type Config struct {
