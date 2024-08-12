@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 )
 
 type RDBReader struct {
@@ -92,19 +93,70 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 	}
 }
 func (r *RDBReader) readString() (string, error) {
-	size, err := r.readSize()
-	if err != nil {
-		return "", err
-	}
-	fmt.Printf("String size: %d\n", size)
-
-	data := make([]byte, size)
-	_, err = io.ReadFull(r.reader, data)
+	b, err := r.reader.ReadByte()
 	if err != nil {
 		return "", err
 	}
 
-	return string(data), nil
+	fmt.Printf("String encoding byte: 0x%02X\n", b)
+
+	if b>>6 != 3 {
+		// Standard string encoding
+		r.reader.UnreadByte()
+		size, err := r.readSize()
+		if err != nil {
+			return "", err
+		}
+		fmt.Printf("String size: %d\n", size)
+
+		data := make([]byte, size)
+		_, err = io.ReadFull(r.reader, data)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+
+	// Special encoding
+	switch b & 0x3F {
+	case 0: // 8 bit integer
+		intVal, err := r.reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(int(intVal)), nil
+	case 1: // 16 bit integer
+		intVal, err := r.readUint16()
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(int(intVal)), nil
+	case 2: // 32 bit integer
+		intVal, err := r.readUint32()
+		if err != nil {
+			return "", err
+		}
+		return strconv.Itoa(int(intVal)), nil
+	default:
+		return "", fmt.Errorf("unsupported special string encoding: 0x%02X", b)
+	}
+}
+func (r *RDBReader) readUint16() (uint16, error) {
+	buf := make([]byte, 2)
+	_, err := io.ReadFull(r.reader, buf)
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint16(buf), nil
+}
+
+func (r *RDBReader) readUint32() (uint32, error) {
+	buf := make([]byte, 4)
+	_, err := io.ReadFull(r.reader, buf)
+	if err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint32(buf), nil
 }
 
 /*
