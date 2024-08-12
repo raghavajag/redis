@@ -70,7 +70,7 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 		}
 		fmt.Printf("Read byte: 0x%02X\n", b)
 		switch b {
-		case 0xFA:
+		case 0xFA: // meta data key value
 			fmt.Println("Metadata entry found")
 			metaKey, err := r.readString()
 			if err != nil {
@@ -83,9 +83,30 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 				return nil, err
 			}
 			fmt.Printf("Metadata: %s = %s\n", metaKey, metaValue)
-		case 0xFE: // Database selector
-		case 0xFB: // Hash table size info
-		case 0xFF: // End of file
+		case 0xFE: // database selector
+			fmt.Println("Database selector found")
+			dbNum, err := r.readSize()
+			if err != nil {
+				fmt.Printf("Error reading database number: %v\n", err)
+				return nil, err
+			}
+			fmt.Printf("Database number: %d\n", dbNum)
+		case 0xFB: // hash table size
+			fmt.Println("Hash table size info found")
+			keySize, err := r.readSize()
+			if err != nil {
+				fmt.Printf("Error reading key hash table size: %v\n", err)
+				return nil, err
+			}
+			expireSize, err := r.readSize()
+			if err != nil {
+				fmt.Printf("Error reading expire hash table size: %v\n", err)
+				return nil, err
+			}
+			fmt.Printf("Hash table sizes - Keys: %d, Expires: %d\n", keySize, expireSize)
+		case 0xFF: // EOF
+			fmt.Println("End of file marker found")
+			return nil, nil
 		case 0x00: // start of key value; load into db
 		default:
 			return nil, fmt.Errorf("unexpected byte: 0x%02X", b)
