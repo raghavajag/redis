@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -58,7 +60,7 @@ func NewStore(config Config) (*Store, error) {
 func main() {
 	config := Config{}
 
-	flag.StringVar(&config.Dir, "dir", "/tmp", "Directory for RDB file")
+	flag.StringVar(&config.Dir, "dir", "tmp", "Directory for RDB file")
 	flag.StringVar(&config.DBFilename, "dbfilename", "dump.rdb", "RDB filename")
 	flag.Parse()
 
@@ -182,10 +184,18 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 			return Value{}, fmt.Errorf("invalid CONFIG command")
 		}
 		return configGetHandler(store, cmds[2].BulkString), nil
-
+	case "SAVE":
+		return saveHandler(store), nil
 	default:
 		return Value{}, fmt.Errorf("command not found")
 	}
+}
+func saveHandler(store *Store) Value {
+	err := store.Save()
+	if err != nil {
+		return Value{Type: TypeString, String: "-ERR " + err.Error()}
+	}
+	return Value{Type: TypeString, String: "+OK"}
 }
 func printValue(v Value, indent string) {
 	fmt.Printf("%sType: %s\n", indent, v.Type)
@@ -205,4 +215,73 @@ func printValue(v Value, indent string) {
 			printValue(item, indent+"    ")
 		}
 	}
+}
+func (s *Store) Save() error {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+
+	path := fmt.Sprintf("./%s/%s", s.config.Dir, s.config.DBFilename)
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	err = s.writeRDB(writer)
+	if err != nil {
+		return err
+	}
+
+	return writer.Flush()
+}
+func (s *Store) writeRDB(w *bufio.Writer) error {
+	// Write header
+	_, err := w.Write([]byte("REDIS0012"))
+	if err != nil {
+		return err
+	}
+
+	// Write key-value pairs
+	for key, v := range s.items {
+		err := s.writeKeyValue(w, key, v)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Write EOF
+	_, err = w.Write([]byte{0xFF})
+	return err
+}
+func (s *Store) writeString(w *bufio.Writer, str string) error {
+	// Write string length
+	size := len(str)
+	err := binary.Write(w, binary.BigEndian, uint8(size))
+	if err != nil {
+		return err
+	}
+
+	// Write string data
+	_, err = w.WriteString(str)
+	return err
+}
+func (s *Store) writeKeyValue(w *bufio.Writer, key string, v V) error {
+	// Write key
+	_, err := w.Write([]byte{0x00})
+	if err != nil {
+		return err
+	}
+	err = s.writeString(w, key)
+	if err != nil {
+		return err
+	}
+
+	// Write value
+	err = s.writeString(w, v.value)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
