@@ -58,10 +58,12 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 	}
 	err := r.readHeader()
 	if err != nil {
+		fmt.Printf("Error reading header: %v\n", err)
 		return nil, err
 	}
+	fmt.Println("Header read successfully")
 
-	// database := make(map[string]string)
+	database := make(map[string]string)
 
 	for {
 		b, err := r.reader.ReadByte()
@@ -70,6 +72,14 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 		}
 		fmt.Printf("Read byte: 0x%02X\n", b)
 		switch b {
+		case 0xFE: // database selector
+			fmt.Println("Database selector found")
+			dbNum, err := r.readSize()
+			if err != nil {
+				fmt.Printf("Error reading database number: %v\n", err)
+				return nil, err
+			}
+			fmt.Printf("Database number: %d\n", dbNum)
 		case 0xFA: // meta data key value
 			fmt.Println("Metadata entry found")
 			metaKey, err := r.readString()
@@ -83,14 +93,6 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 				return nil, err
 			}
 			fmt.Printf("Metadata: %s = %s\n", metaKey, metaValue)
-		case 0xFE: // database selector
-			fmt.Println("Database selector found")
-			dbNum, err := r.readSize()
-			if err != nil {
-				fmt.Printf("Error reading database number: %v\n", err)
-				return nil, err
-			}
-			fmt.Printf("Database number: %d\n", dbNum)
 		case 0xFB: // hash table size
 			fmt.Println("Hash table size info found")
 			keySize, err := r.readSize()
@@ -104,10 +106,24 @@ func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 				return nil, err
 			}
 			fmt.Printf("Hash table sizes - Keys: %d, Expires: %d\n", keySize, expireSize)
+		case 0x00: // start of key value; load into db
+			fmt.Println("Start of key-value pair")
+			key, err := r.readString()
+			if err != nil {
+				fmt.Printf("Error reading key: %v\n", err)
+				return nil, err
+			}
+			value, err := r.readString()
+			if err != nil {
+				fmt.Printf("Error reading value: %v\n", err)
+				return nil, err
+			}
+			fmt.Printf("Read key-value pair: %s = %s\n", key, value)
+			database[key] = value
+
 		case 0xFF: // EOF
 			fmt.Println("End of file marker found")
-			return nil, nil
-		case 0x00: // start of key value; load into db
+			return database, nil
 		default:
 			return nil, fmt.Errorf("unexpected byte: 0x%02X", b)
 		}
