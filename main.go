@@ -14,8 +14,12 @@ import (
 )
 
 type Config struct {
-	Dir        string
-	DBFilename string
+	Dir             string
+	DBFilename      string
+	Port            int    // Regular Redis port
+	ReplicationPort int    // Port for replication
+	Role            string // "master" or "replica"
+	MasterAddr      string // Master address if running as replica
 }
 type V struct {
 	expiry    time.Duration
@@ -62,6 +66,9 @@ func main() {
 
 	flag.StringVar(&config.Dir, "dir", "tmp", "Directory for RDB file")
 	flag.StringVar(&config.DBFilename, "dbfilename", "dump.rdb", "RDB filename")
+	flag.IntVar(&config.ReplicationPort, "replication-port", 6380, "Replication port")
+	flag.StringVar(&config.Role, "role", "master", "Role: master or replica")
+	flag.StringVar(&config.MasterAddr, "master", "", "Master address (host:port)")
 	flag.Parse()
 
 	store, err := NewStore(config)
@@ -70,12 +77,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start regular Redis server
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
 
+	// Start replication listener if master
+	if config.Role == "master" {
+		_, err := net.Listen("tcp", fmt.Sprintf(":%d", config.ReplicationPort))
+		if err != nil {
+			fmt.Printf("Failed to bind to replication port %d\n", config.ReplicationPort)
+			os.Exit(1)
+		}
+		// accept replication connections...
+	}
 	for {
 		conn, err := l.Accept()
 		if err != nil {
