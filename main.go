@@ -27,9 +27,11 @@ type V struct {
 	value     string
 }
 type Store struct {
-	items  map[string]V
-	mux    sync.Mutex
-	config Config
+	items      map[string]V
+	mux        sync.Mutex
+	config     Config
+	replConfig ReplicationConfig
+	replState  *ReplicationState
 }
 
 const (
@@ -76,7 +78,10 @@ func main() {
 		fmt.Printf("Failed to initialize store: %s\n", err)
 		os.Exit(1)
 	}
-
+	if err := store.initReplication(); err != nil {
+		fmt.Printf("Failed to initialize replication: %s\n", err)
+		os.Exit(1)
+	}
 	// Start regular Redis server
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -178,6 +183,30 @@ func configGetHandler(store *Store, param string) Value {
 		},
 	}
 }
+func handleInfoCommand(store *Store) Value {
+	info := strings.Builder{}
+	info.WriteString("# Replication\r\n")
+	info.WriteString(fmt.Sprintf("role:%s\r\n", store.replState.role))
+
+	if store.replState.role == "master" {
+		store.replState.mux.RLock()
+		info.WriteString(fmt.Sprintf("connected_slaves:%d\r\n", len(store.replState.replicas)))
+		for addr := range store.replState.replicas {
+			info.WriteString(fmt.Sprintf("slave:%s\r\n", addr))
+		}
+		store.replState.mux.RUnlock()
+	} else {
+		info.WriteString(fmt.Sprintf("master_host:%s\r\n", store.config.MasterAddr))
+		// Additional details for replica
+		if store.replState.masterConn != nil {
+			info.WriteString(fmt.Sprintf("master_link_status:up\r\n"))
+		} else {
+			info.WriteString(fmt.Sprintf("master_link_status:down\r\n"))
+		}
+	}
+
+	return Value{Type: TypeBulkString, BulkString: info.String()}
+}
 func handleCommand(commands Value, store *Store) (Value, error) {
 	cmds := commands.Array
 	switch strings.ToUpper(cmds[0].BulkString) {
@@ -201,6 +230,8 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 			return Value{}, fmt.Errorf("invalid CONFIG command")
 		}
 		return configGetHandler(store, cmds[2].BulkString), nil
+	case "INFO":
+		return handleInfoCommand(store), nil
 	case "SAVE":
 		return saveHandler(store), nil
 	default:
