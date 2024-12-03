@@ -37,7 +37,7 @@ func (s *Store) initReplication() error {
 	}
 	if s.replConfig.ReplicaOf != "" {
 		s.replState.role = "replica"
-		// start replication as replica
+		return s.startAsReplica()
 	}
 
 	s.replState.role = "master"
@@ -52,14 +52,26 @@ func (s *Store) startAsMaster() error {
 	go s.acceptReplicas(listener)
 	return nil
 }
+func (s *Store) startAsReplica() error {
+	masterConn, err := net.Dial("tcp", s.replConfig.ReplicaOf)
+	if err != nil {
+		return fmt.Errorf("failed to connect to master: %v", err)
+	}
+
+	s.replState.masterConn = masterConn
+
+	// Perform handshake and initial synchronization here
+
+	return nil
+}
 func (s *Store) acceptReplicas(listener net.Listener) {
 	for {
-		_, err := listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			fmt.Printf("Error accepting replica: %v\n", err)
 			continue
 		}
-		// go s.handleReplicaConnection(conn)
+		go s.handleReplicaConnection(conn)
 	}
 }
 func (s *Store) handleReplicaConnection(conn net.Conn) {
@@ -79,6 +91,8 @@ func (s *Store) handleReplicaConnection(conn net.Conn) {
 	s.replState.mux.Lock()
 	s.replState.replicas[conn.RemoteAddr().String()] = replica
 	s.replState.mux.Unlock()
+
+	fmt.Println("Replica connected:", conn.RemoteAddr())
 
 	// Start replica command processing
 	// go s.handleReplicaCommands(replica)

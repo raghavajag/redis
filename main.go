@@ -95,9 +95,9 @@ func main() {
 		os.Exit(1)
 	}
 	// Start regular Redis server
-	l, err := net.Listen("tcp", "0.0.0.0:6379")
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", config.Port))
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379")
+		fmt.Println("Error listening: ", err.Error())
 		os.Exit(1)
 	}
 
