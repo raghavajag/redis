@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -34,5 +35,54 @@ func (s *Store) initReplication() error {
 		replicas: make(map[string]*Replica),
 		offset:   0,
 	}
+	if s.replConfig.ReplicaOf != "" {
+		s.replState.role = "replica"
+		// start replication as replica
+	}
+
+	s.replState.role = "master"
+	return s.startAsMaster()
+}
+func (s *Store) startAsMaster() error {
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.replConfig.Port))
+	if err != nil {
+		return err
+	}
+
+	go s.acceptReplicas(listener)
 	return nil
+}
+func (s *Store) acceptReplicas(listener net.Listener) {
+	for {
+		_, err := listener.Accept()
+		if err != nil {
+			fmt.Printf("Error accepting replica: %v\n", err)
+			continue
+		}
+		// go s.handleReplicaConnection(conn)
+	}
+}
+func (s *Store) handleReplicaConnection(conn net.Conn) {
+	replica := &Replica{
+		conn:   conn,
+		writer: NewRESPWriter(conn),
+		reader: NewRESPReader(conn),
+	}
+
+	// Handle PING
+	// if err := s.handleReplicaPing(replica); err != nil {
+	// 	conn.Close()
+	// 	return
+	// }
+
+	// Add replica to list
+	s.replState.mux.Lock()
+	s.replState.replicas[conn.RemoteAddr().String()] = replica
+	s.replState.mux.Unlock()
+
+	// Start replica command processing
+	// go s.handleReplicaCommands(replica)
+}
+func generateRandomID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
 }

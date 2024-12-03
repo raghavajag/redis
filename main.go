@@ -57,17 +57,33 @@ func NewStore(config Config) (*Store, error) {
 	for key, value := range database {
 		items[key] = V{value: value}
 	}
-
-	return &Store{
-		items:  items,
-		config: config,
-	}, nil
+	replConfig := ReplicationConfig{
+		Port:      config.ReplicationPort,
+		ReplicaOf: config.MasterAddr,
+		ReplID:    generateRandomID(),
+	}
+	replState := &ReplicationState{
+		role:     config.Role,
+		replicas: make(map[string]*Replica),
+		offset:   0,
+	}
+	store := &Store{
+		items:      items,
+		config:     config,
+		replConfig: replConfig,
+		replState:  replState,
+	}
+	if err := store.initReplication(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 func main() {
 	config := Config{}
 
 	flag.StringVar(&config.Dir, "dir", "tmp", "Directory for RDB file")
 	flag.StringVar(&config.DBFilename, "dbfilename", "dump.rdb", "RDB filename")
+	flag.IntVar(&config.Port, "port", 6379, "Redis port")
 	flag.IntVar(&config.ReplicationPort, "replication-port", 6380, "Replication port")
 	flag.StringVar(&config.Role, "role", "master", "Role: master or replica")
 	flag.StringVar(&config.MasterAddr, "master", "", "Master address (host:port)")
@@ -78,10 +94,6 @@ func main() {
 		fmt.Printf("Failed to initialize store: %s\n", err)
 		os.Exit(1)
 	}
-	if err := store.initReplication(); err != nil {
-		fmt.Printf("Failed to initialize replication: %s\n", err)
-		os.Exit(1)
-	}
 	// Start regular Redis server
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -89,15 +101,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start replication listener if master
-	if config.Role == "master" {
-		_, err := net.Listen("tcp", fmt.Sprintf(":%d", config.ReplicationPort))
-		if err != nil {
-			fmt.Printf("Failed to bind to replication port %d\n", config.ReplicationPort)
-			os.Exit(1)
-		}
-		// accept replication connections...
-	}
 	for {
 		conn, err := l.Accept()
 		if err != nil {
