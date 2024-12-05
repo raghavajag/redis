@@ -59,11 +59,40 @@ func (s *Store) startAsReplica() error {
 	}
 
 	s.replState.masterConn = masterConn
+	reader := NewRESPReader(masterConn)
+	writer := NewRESPWriter(masterConn)
 
-	// Perform handshake and initial synchronization here
+	// Send PING
+	pingCmd := Value{
+		Type: TypeArray,
+		Array: []Value{
+			{Type: TypeBulkString, BulkString: "PING"},
+		},
+	}
+	if err := writer.Write(pingCmd); err != nil {
+		masterConn.Close()
+		return fmt.Errorf("failed to send PING: %v", err)
+	}
+
+	// Wait for PONG
+	response, err := reader.Read()
+	if (response.Type != TypeString && response.Type != TypeBulkString) ||
+		(response.String != "PONG" && response.BulkString != "PONG") {
+		masterConn.Close()
+		return fmt.Errorf("invalid PONG response: %v", err)
+	}
+	fmt.Printf("Received PONG from master: %v\n", response)
+	// Store master connection
+	s.replState.masterConn = masterConn
+	s.replState.role = "replica"
+
+	// Start processing commands from master
+	// go s.handleMasterConnection(conn)
 
 	return nil
+
 }
+
 func (s *Store) acceptReplicas(listener net.Listener) {
 	for {
 		conn, err := listener.Accept()
@@ -76,27 +105,42 @@ func (s *Store) acceptReplicas(listener net.Listener) {
 }
 func (s *Store) handleReplicaConnection(conn net.Conn) {
 	replica := &Replica{
-		conn:   conn,
-		writer: NewRESPWriter(conn),
-		reader: NewRESPReader(conn),
+		conn:    conn,
+		writer:  NewRESPWriter(conn),
+		reader:  NewRESPReader(conn),
+		offset:  0,
+		lastACK: time.Now(),
 	}
 
-	// Handle PING
-	// if err := s.handleReplicaPing(replica); err != nil {
-	// 	conn.Close()
-	// 	return
-	// }
+	// Wait for PING
+	command, err := replica.reader.Read()
+	if err != nil || command.Type != TypeArray ||
+		len(command.Array) == 0 || command.Array[0].BulkString != PING {
+		fmt.Printf("Invalid handshake from replica: %v\n", err)
+		conn.Close()
+		return
+	}
+	fmt.Printf("Received PING from replica: %v\n", command)
 
-	// Add replica to list
+	// Send PONG
+	pongResponse := Value{
+		Type:       TypeBulkString,
+		BulkString: "PONG",
+	}
+	if err := replica.writer.Write(pongResponse); err != nil {
+		fmt.Printf("Failed to send PONG: %v\n", err)
+		// conn.Close()
+		return
+	}
+
+	// Add replica to list after successful handshake
 	s.replState.mux.Lock()
 	s.replState.replicas[conn.RemoteAddr().String()] = replica
 	s.replState.mux.Unlock()
 
-	fmt.Println("Replica connected:", conn.RemoteAddr())
-
-	// Start replica command processing
-	// go s.handleReplicaCommands(replica)
+	fmt.Printf("Replica connected successfully: %s\n", conn.RemoteAddr())
 }
+
 func generateRandomID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
