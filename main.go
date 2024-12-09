@@ -32,6 +32,7 @@ type Store struct {
 	config     Config
 	replConfig ReplicationConfig
 	replState  *ReplicationState
+	logger     *Logger
 }
 
 const (
@@ -72,6 +73,7 @@ func NewStore(config Config) (*Store, error) {
 		config:     config,
 		replConfig: replConfig,
 		replState:  replState,
+		logger:     NewLogger(true),
 	}
 	if err := store.initReplication(); err != nil {
 		return nil, err

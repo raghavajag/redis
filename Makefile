@@ -44,12 +44,12 @@ run-master: build
 
 # Run replica instance
 run-replica: build
-	./$(BUILD_DIR)/$(BINARY_NAME) -role replica -master localhost:6380
+	./$(BUILD_DIR)/$(BINARY_NAME) -role replica -master localhost:6380 -port 5379
 
 # Run multiple replicas (ports 6381, 6382)
 run-replicas: build
-	./$(BUILD_DIR)/$(BINARY_NAME) -role replica -master localhost:6380 & \
-	./$(BUILD_DIR)/$(BINARY_NAME) -role replica -master localhost:6380
+	./$(BUILD_DIR)/$(BINARY_NAME) -role replica -master localhost:6380 -port 5379 & \
+	./$(BUILD_DIR)/$(BINARY_NAME) -role replica -master localhost:6380 -port 5380
 
 # Stop all running instances
 stop:
