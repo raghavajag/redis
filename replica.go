@@ -32,8 +32,8 @@ type Replica struct {
 func (s *Store) initReplication() error {
 	s.logger.Info("Initializing replication with role: %s", s.config.Role)
 	s.replState = &ReplicationState{
-		role:     s.config.Role,
 		replicas: make(map[string]*Replica),
+		role:     s.config.Role,
 		offset:   0,
 	}
 	if s.replConfig.ReplicaOf != "" {
@@ -48,39 +48,30 @@ func (s *Store) initReplication() error {
 }
 
 func (s *Store) startAsReplica() error {
-	masterConn, err := net.Dial("tcp", s.replConfig.ReplicaOf)
+	conn, err := net.Dial("tcp", s.replConfig.ReplicaOf)
 	if err != nil {
 		s.logger.Error("Failed to connect to master: %v", err)
 		return fmt.Errorf("failed to connect to master: %v", err)
 	}
 
 	s.logger.Info("Connected to master at %s", s.replConfig.ReplicaOf)
-	s.replState.masterConn = masterConn
-	reader := NewRESPReader(masterConn)
-	writer := NewRESPWriter(masterConn)
+	s.replState.masterConn = conn
 
-	pingCmd := Value{
-		Type: TypeArray,
-		Array: []Value{
-			{Type: TypeBulkString, BulkString: "PING"},
-		},
-	}
-	if err := writer.Write(pingCmd); err != nil {
-		masterConn.Close()
-		s.logger.Error("Failed to send PING to master: %v", err)
-		return fmt.Errorf("failed to send PING: %v", err)
+	replica := &Replica{
+		conn:    conn,
+		writer:  NewRESPWriter(conn),
+		reader:  NewRESPReader(conn),
+		lastACK: time.Now(),
 	}
 
-	response, err := reader.Read()
-	if err != nil || (response.Type != TypeString && response.Type != TypeBulkString) ||
-		(response.String != "PONG" && response.BulkString != "PONG") {
-		masterConn.Close()
-		s.logger.Error("Invalid PONG response from master: %v", err)
-		return fmt.Errorf("invalid PONG response: %v", err)
+	// Perform handshake with the master
+	if err := s.performHandshake(replica); err != nil {
+		conn.Close()
+		return fmt.Errorf("handshake failed: %v", err)
 	}
-	s.logger.Info("Received PONG from master")
-	s.replState.masterConn = masterConn
-	s.replState.role = "replica"
+
+	// Start Receive and Send routines
+	// process incoming commands
 
 	return nil
 }
@@ -143,4 +134,35 @@ func (s *Store) handleReplicaConnection(conn net.Conn) {
 }
 func generateRandomID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+func (s *Store) performHandshake(replica *Replica) error {
+	// Step 1: Send PING
+
+	pingCmd := Value{
+		Type: TypeArray,
+		Array: []Value{
+			{Type: TypeBulkString, BulkString: PING},
+		},
+	}
+	s.logger.Info("Sending PING to master")
+	if err := replica.writer.Write(pingCmd); err != nil {
+		s.logger.Error("Failed to send PING during handshake: %v", err)
+		return fmt.Errorf("failed to send PING during handshake")
+	}
+
+	// Wait for PONG response
+	response, err := replica.reader.Read()
+	if err != nil || !isPongResponse(response) {
+		return fmt.Errorf("invalid PING response: expected PONG, got %v", response)
+	}
+	s.logger.Info("Received PONG from master")
+
+	// Step 2: Send REPLCONF listening-port
+	// Wait for OK response
+
+	return nil
+}
+func isPongResponse(v Value) bool {
+	return (v.Type == TypeString && v.String == "PONG") ||
+		(v.Type == TypeBulkString && v.BulkString == "PONG")
 }

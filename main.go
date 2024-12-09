@@ -63,16 +63,10 @@ func NewStore(config Config) (*Store, error) {
 		ReplicaOf: config.MasterAddr,
 		ReplID:    generateRandomID(),
 	}
-	replState := &ReplicationState{
-		role:     config.Role,
-		replicas: make(map[string]*Replica),
-		offset:   0,
-	}
 	store := &Store{
 		items:      items,
 		config:     config,
 		replConfig: replConfig,
-		replState:  replState,
 		logger:     NewLogger(true),
 	}
 	if err := store.initReplication(); err != nil {
