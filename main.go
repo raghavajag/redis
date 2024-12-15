@@ -61,7 +61,7 @@ func NewStore(config Config) (*Store, error) {
 	replConfig := ReplicationConfig{
 		Port:      config.ReplicationPort,
 		ReplicaOf: config.MasterAddr,
-		ReplID:    generateRandomID(),
+		ReplID:    generateReplicaID(),
 	}
 	store := &Store{
 		items:      items,
@@ -74,6 +74,7 @@ func NewStore(config Config) (*Store, error) {
 	}
 	return store, nil
 }
+
 func main() {
 	config := Config{}
 
@@ -106,6 +107,7 @@ func main() {
 		go handleConnection(conn, store)
 	}
 }
+
 func handleConnection(conn net.Conn, store *Store) {
 	defer conn.Close()
 	respReader := NewRESPReader(conn)
@@ -136,14 +138,15 @@ func handleConnection(conn net.Conn, store *Store) {
 			return
 		}
 	}
-
 }
+
 func setHandlerWithExpiry(store *Store, key string, val string, expiry uint64) Value {
 	store.mux.Lock()
 	defer store.mux.Unlock()
 	store.items[key] = V{expiry: time.Duration(expiry), savedTime: time.Now(), value: val}
 	return Value{Type: TypeString, String: "OK"}
 }
+
 func setHandler(store *Store, key string, val string) Value {
 	fmt.Printf("key: %s val: %s\n", key, val)
 	store.mux.Lock()
@@ -151,6 +154,7 @@ func setHandler(store *Store, key string, val string) Value {
 	store.items[key] = V{savedTime: time.Now(), value: val}
 	return Value{Type: TypeString, String: "OK"}
 }
+
 func getHandler(store *Store, key string) Value {
 	store.mux.Lock()
 	defer store.mux.Unlock()
@@ -163,6 +167,7 @@ func getHandler(store *Store, key string) Value {
 	}
 	return Value{Type: TypeString, String: val.value}
 }
+
 func configGetHandler(store *Store, param string) Value {
 	var value string
 	switch strings.ToLower(param) {
@@ -182,6 +187,7 @@ func configGetHandler(store *Store, param string) Value {
 		},
 	}
 }
+
 func handleInfoCommand(store *Store) Value {
 	info := strings.Builder{}
 	info.WriteString("# Replication\r\n")
@@ -206,6 +212,7 @@ func handleInfoCommand(store *Store) Value {
 
 	return Value{Type: TypeBulkString, BulkString: info.String()}
 }
+
 func handleCommand(commands Value, store *Store) (Value, error) {
 	cmds := commands.Array
 	switch strings.ToUpper(cmds[0].BulkString) {
@@ -233,10 +240,14 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 		return handleInfoCommand(store), nil
 	case "SAVE":
 		return saveHandler(store), nil
+	case "REPLCONF":
+		return handleReplConfCommand(store, cmds[1:]), nil
+
 	default:
 		return Value{}, fmt.Errorf("command not found")
 	}
 }
+
 func saveHandler(store *Store) Value {
 	err := store.Save()
 	if err != nil {
@@ -244,6 +255,7 @@ func saveHandler(store *Store) Value {
 	}
 	return Value{Type: TypeString, String: "+OK"}
 }
+
 func printValue(v Value, indent string) {
 	fmt.Printf("%sType: %s\n", indent, v.Type)
 	if v.String != "" {
@@ -263,6 +275,7 @@ func printValue(v Value, indent string) {
 		}
 	}
 }
+
 func (s *Store) Save() error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -282,6 +295,7 @@ func (s *Store) Save() error {
 
 	return writer.Flush()
 }
+
 func (s *Store) writeRDB(w *bufio.Writer) error {
 	// Write header
 	_, err := w.Write([]byte("REDIS0012"))
@@ -301,6 +315,7 @@ func (s *Store) writeRDB(w *bufio.Writer) error {
 	_, err = w.Write([]byte{0xFF})
 	return err
 }
+
 func (s *Store) writeString(w *bufio.Writer, str string) error {
 	// Write string length
 	size := len(str)
@@ -313,6 +328,7 @@ func (s *Store) writeString(w *bufio.Writer, str string) error {
 	_, err = w.WriteString(str)
 	return err
 }
+
 func (s *Store) writeKeyValue(w *bufio.Writer, key string, v V) error {
 	// Write key
 	_, err := w.Write([]byte{0x00})
@@ -331,4 +347,26 @@ func (s *Store) writeKeyValue(w *bufio.Writer, key string, v V) error {
 	}
 
 	return nil
+}
+
+func handleReplConfCommand(store *Store, args []Value) Value {
+	if len(args) < 2 || args[0].Type != TypeBulkString || args[1].Type != TypeBulkString {
+		return Value{Type: TypeBulkString, BulkString: "-ERR invalid REPLCONF arguments"}
+	}
+
+	subCommand := strings.ToLower(args[0].BulkString)
+	switch subCommand {
+	case "listening-port":
+		port := args[1].BulkString
+		store.logger.Info("Replica reported listening port: %s", port)
+		return Value{Type: TypeBulkString, BulkString: "OK"}
+
+	case "ack":
+		offset := args[1].BulkString
+		store.logger.Info("Received ACK with offset %s", offset)
+		return Value{Type: TypeBulkString, BulkString: "OK"}
+
+	default:
+		return Value{Type: TypeBulkString, BulkString: "-ERR unknown REPLCONF subcommand"}
+	}
 }
