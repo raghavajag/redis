@@ -106,50 +106,69 @@ func (s *Store) processIncomingCommandsFromReplicas() {
 		for _, replica := range s.replState.replicas {
 			go func(r *Replica) {
 				for cmd := range r.incoming {
-					// Handle PING command specially
-					if isPingCommand(cmd) {
-						pongCmd := Value{Type: TypeBulkString, BulkString: "PONG"}
-						select {
-						case r.outgoing <- pongCmd:
-							s.logger.Info("Sent PONG response to replica %s", r.ID)
-						default:
-							s.logger.Error("Failed to send PONG to replica %s", r.ID)
-						}
-						continue
-					}
-
-					// Handle REPLCONF command specially
-					if isReplConfCommand(cmd) {
-						okCmd := Value{Type: TypeBulkString, BulkString: "OK"}
-						select {
-						case r.outgoing <- okCmd:
-							s.logger.Info("Sent OK response to replica %s", r.ID)
-						default:
-							s.logger.Error("Failed to send OK to replica %s", r.ID)
-						}
-						continue
-					}
-
-					// Process other commands normally
-					result, err := handleCommand(cmd, s)
+					// Check and handle the type of command
+					response, err := s.processReplicaCommand(r, cmd)
 					if err != nil {
 						s.logger.Error("Error processing command from replica %s: %v", r.ID, err)
 						continue
 					}
 
-					// Send response back to replica
+					// Pipe the response into the outgoing channel
 					select {
-					case r.outgoing <- result:
-						s.logger.Info("Sent response to replica %s", r.ID)
+					case r.outgoing <- response:
+						s.logger.Info("Sent response to replica %s: %v", r.ID, response)
 					default:
-						s.logger.Error("Failed to send response to replica %s", r.ID)
+						s.logger.Error("Failed to send response to replica %s; outgoing queue is full", r.ID)
 					}
 				}
 			}(replica)
 		}
 		s.replState.mux.RUnlock()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond) // Avoid busy looping
 	}
+}
+
+func (s *Store) processReplicaCommand(replica *Replica, cmd Value) (Value, error) {
+	// Handle PING command
+	if isPingCommand(cmd) {
+		s.logger.Info("Received PING from replica %s", replica.ID)
+		return Value{Type: TypeBulkString, BulkString: "PONG"}, nil
+	}
+
+	// Handle REPLCONF command
+	if isReplConfCommand(cmd) {
+		return s.handleReplConfCommand(replica, cmd)
+	}
+
+	// Handle other commands normally
+	result, err := handleCommand(cmd, s)
+	if err != nil {
+		return Value{}, fmt.Errorf("error processing command: %v", err)
+	}
+	return result, nil
+}
+func (s *Store) handleReplConfCommand(replica *Replica, cmd Value) (Value, error) {
+	if len(cmd.Array) < 2 {
+		return Value{}, fmt.Errorf("invalid REPLCONF command from replica %s", replica.ID)
+	}
+
+	subcommand := strings.ToLower(cmd.Array[1].BulkString)
+
+	switch subcommand {
+	case "listening-port":
+		if len(cmd.Array) < 3 {
+			return Value{}, fmt.Errorf("missing port in REPLCONF listening-port from replica %s", replica.ID)
+		}
+		port := cmd.Array[2].BulkString
+		s.logger.Info("Replica %s reported listening port: %s", replica.ID, port)
+	case "ack":
+		replica.lastACK = time.Now()
+		s.logger.Info("Received ACK from replica %s at offset %d", replica.ID, replica.offset)
+	default:
+		return Value{}, fmt.Errorf("unknown REPLCONF subcommand '%s' from replica %s", subcommand, replica.ID)
+	}
+
+	return Value{Type: TypeBulkString, BulkString: "OK"}, nil
 }
 
 func (s *Store) cleanupReplica(replica *Replica) {
