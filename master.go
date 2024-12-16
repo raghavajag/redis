@@ -116,7 +116,6 @@ func (s *Store) processIncomingCommandsFromReplicas() {
 					// Pipe the response into the outgoing channel
 					select {
 					case r.outgoing <- response:
-						s.logger.Info("Sent response to replica %s: %v", r.ID, response)
 					default:
 						s.logger.Error("Failed to send response to replica %s; outgoing queue is full", r.ID)
 					}
@@ -140,7 +139,10 @@ func (s *Store) processReplicaCommand(replica *Replica, cmd Value) (Value, error
 		return s.handleReplConfCommand(replica, cmd)
 	}
 
-	// Handle other commands normally
+	// Handle other commands n// Handle PSYNC command
+	if isPSYNCCommand(cmd) {
+		return s.handlePSYNCCommand(replica, cmd)
+	}
 	result, err := handleCommand(cmd, s)
 	if err != nil {
 		return Value{}, fmt.Errorf("error processing command: %v", err)
@@ -170,6 +172,20 @@ func (s *Store) handleReplConfCommand(replica *Replica, cmd Value) (Value, error
 
 	return Value{Type: TypeBulkString, BulkString: "OK"}, nil
 }
+func (s *Store) handlePSYNCCommand(replica *Replica, cmd Value) (Value, error) {
+	if len(cmd.Array) < 2 {
+		return Value{}, fmt.Errorf("invalid PSYNC command from replica %s", replica.ID)
+	}
+
+	offset := cmd.Array[1].BulkString // Replica's replication offset
+
+	s.logger.Info("Received PSYNC from replica %s with offset %s", replica.ID, offset)
+
+	// Simulate creating an RDB snapshot
+	// Send RDB data to the replica
+
+	return Value{Type: TypeBulkString, BulkString: "CONTINUE"}, nil // Indicate incremental updates will follow
+}
 
 func (s *Store) cleanupReplica(replica *Replica) {
 	s.replState.mux.Lock()
@@ -195,4 +211,10 @@ func isReplConfCommand(v Value) bool {
 	return len(v.Array) > 0 &&
 		v.Array[0].Type == TypeBulkString &&
 		strings.ToUpper(v.Array[0].BulkString) == "REPLCONF"
+}
+
+func isPSYNCCommand(v Value) bool {
+	return len(v.Array) > 0 &&
+		v.Array[0].Type == TypeBulkString &&
+		strings.ToUpper(v.Array[0].BulkString) == "PSYNC"
 }

@@ -73,10 +73,39 @@ func (s *Store) startAsReplica() error {
 		return fmt.Errorf("handshake failed: %v", err)
 	}
 
+	if err := s.sendPSYNC(replica); err != nil {
+		conn.Close()
+		return fmt.Errorf("PSYNC failed: %v", err)
+	}
+
 	// Start goroutines for handling communication with the master
 	go s.receiveCommandsFromMaster(replica)
 	go s.sendResponsesToMaster(replica)
 	go s.processIncomingCommands(replica)
+
+	return nil
+}
+func (s *Store) sendPSYNC(replica *Replica) error {
+	psyncCmd := Value{
+		Type: TypeArray,
+		Array: []Value{
+			{Type: TypeBulkString, BulkString: "PSYNC"},
+			{Type: TypeBulkString, BulkString: strconv.FormatInt(s.replState.offset, 10)},
+		},
+	}
+
+	s.logger.Info("Sending PSYNC command to master")
+	if err := replica.writer.Write(psyncCmd); err != nil {
+		return fmt.Errorf("failed to send PSYNC command")
+	}
+
+	response, err := replica.reader.Read()
+	if err != nil || !isOKResponse(response) {
+		return fmt.Errorf("invalid PSYNC response")
+	}
+	s.logger.Info("Received OK from master for PSYNC")
+
+	// go s.processRDB(replica) // Start processing RDB after receiving OK
 
 	return nil
 }
