@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
-	"os"
 )
 
 type ReplicationConfig struct {
@@ -86,43 +86,43 @@ func (s *Store) startAsReplica() error {
 
 	return nil
 }
+
 func (s *Store) sendPSYNCCommand(replica *Replica) error {
-    // Send PSYNC command directly through RESP
-    psyncCmd := Value{
-        Type: TypeArray,
-        Array: []Value{
-            {Type: TypeBulkString, BulkString: CMD_PSYNC},
-            {Type: TypeBulkString, BulkString: "?"},
-            {Type: TypeBulkString, BulkString: "-1"},
-        },
-    }
+	// Send PSYNC command directly through RESP
+	psyncCmd := Value{
+		Type: TypeArray,
+		Array: []Value{
+			{Type: TypeBulkString, BulkString: CMD_PSYNC},
+			{Type: TypeBulkString, BulkString: "?"},
+			{Type: TypeBulkString, BulkString: "-1"},
+		},
+	}
 
-    if err := replica.writer.Write(psyncCmd); err != nil {
-        return fmt.Errorf("failed to send PSYNC: %v", err)
-    }
+	if err := replica.writer.Write(psyncCmd); err != nil {
+		return fmt.Errorf("failed to send PSYNC: %v", err)
+	}
 
-    // Read response directly
-    response, err := replica.reader.Read()
-    if err != nil {
-        return fmt.Errorf("failed to read PSYNC response: %v", err)
-    }
+	// Read response directly
+	response, err := replica.reader.Read()
+	if err != nil {
+		return fmt.Errorf("failed to read PSYNC response: %v", err)
+	}
 
-    if !isFullSyncResponse(response) {
-        return fmt.Errorf("unexpected response to PSYNC: %v", response)
-    }
+	if !isFullSyncResponse(response) {
+		return fmt.Errorf("unexpected response to PSYNC: %v", response)
+	}
 
-    // Receive RDB file
-    if err := s.receiveRDBFromMaster(replica); err != nil {
-        return fmt.Errorf("RDB transfer failed: %v", err)
-    }
+	// Receive RDB file
+	if err := s.receiveRDBFromMaster(replica); err != nil {
+		return fmt.Errorf("RDB transfer failed: %v", err)
+	}
 
-    return nil
+	return nil
 }
 
 func isFullSyncResponse(v Value) bool {
-    return v.Type == TypeBulkString && v.BulkString == FULLSYNC
+	return v.Type == TypeBulkString && v.BulkString == FULLSYNC
 }
-
 
 func generateReplicaID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
@@ -265,80 +265,80 @@ func (s *Store) sendResponsesToMaster(replica *Replica) {
 		s.logger.Info("Successfully sent response to master: %v", response)
 	}
 }
+
 func (s *Store) receiveRDBFromMaster(replica *Replica) error {
-    // Read RDB length first (as a RESP integer)
-    lengthResp, err := replica.reader.Read()
-    if err != nil {
-        return fmt.Errorf("failed to read RDB length: %v", err)
-    }
+	// Read RDB length first (as a RESP integer)
+	lengthResp, err := replica.reader.Read()
+	if err != nil {
+		return fmt.Errorf("failed to read RDB length: %v", err)
+	}
 
-    length, err := strconv.ParseInt(lengthResp.BulkString, 10, 64)
-    if err != nil {
-        return fmt.Errorf("invalid RDB length: %v", err)
-    }
+	length, err := strconv.ParseInt(lengthResp.BulkString, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid RDB length: %v", err)
+	}
 
-    // Create temporary file
-    tempPath := fmt.Sprintf("./%s/%s.temp", s.config.Dir, s.config.DBFilename)
-    tempFile, err := os.Create(tempPath)
-    if err != nil {
-        return fmt.Errorf("failed to create temp RDB file: %v", err)
-    }
-    defer tempFile.Close()
+	// Create temporary file
+	tempPath := fmt.Sprintf("./%s/%s.temp", s.config.Dir, s.config.DBFilename)
+	tempFile, err := os.Create(tempPath)
+	if err != nil {
+		return fmt.Errorf("failed to create temp RDB file: %v", err)
+	}
+	defer tempFile.Close()
 
-    // Read raw bytes directly from connection
-    bytesReceived := int64(0)
-    buffer := make([]byte, 8192) // 8KB buffer
+	// Read raw bytes directly from connection
+	bytesReceived := int64(0)
+	buffer := make([]byte, 8192) // 8KB buffer
 
-    for bytesReceived < length {
-        toRead := min(int64(len(buffer)), length-bytesReceived)
-        n, err := io.ReadFull(replica.reader.reader, buffer[:toRead])
-        if err != nil {
-            return fmt.Errorf("error reading RDB data: %v", err)
-        }
+	for bytesReceived < length {
+		toRead := min(int64(len(buffer)), length-bytesReceived)
+		n, err := io.ReadFull(replica.reader.reader, buffer[:toRead])
+		if err != nil {
+			return fmt.Errorf("error reading RDB data: %v", err)
+		}
 
-        if _, err := tempFile.Write(buffer[:n]); err != nil {
-            return fmt.Errorf("error writing RDB chunk: %v", err)
-        }
+		if _, err := tempFile.Write(buffer[:n]); err != nil {
+			return fmt.Errorf("error writing RDB chunk: %v", err)
+		}
 
-        bytesReceived += int64(n)
-        s.logger.Info("RDB receive progress: %d/%d bytes", bytesReceived, length)
-    }
+		bytesReceived += int64(n)
+		s.logger.Info("RDB receive progress: %d/%d bytes", bytesReceived, length)
+	}
 
-    // Ensure all data is written
-    if err := tempFile.Sync(); err != nil {
-        return fmt.Errorf("error syncing RDB file: %v", err)
-    }
+	// Ensure all data is written
+	if err := tempFile.Sync(); err != nil {
+		return fmt.Errorf("error syncing RDB file: %v", err)
+	}
 
-    // Atomically rename temp file
-    finalPath := fmt.Sprintf("./%s/%s", s.config.Dir, s.config.DBFilename)
-    if err := os.Rename(tempPath, finalPath); err != nil {
-        return fmt.Errorf("error finalizing RDB file: %v", err)
-    }
+	// Atomically rename temp file
+	finalPath := fmt.Sprintf("./%s/%s", s.config.Dir, s.config.DBFilename)
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		return fmt.Errorf("error finalizing RDB file: %v", err)
+	}
 
-    // Load the new RDB file
-    return s.loadRDBFile(finalPath)
+	// Load the new RDB file
+	return s.loadRDBFile(finalPath)
 }
 
 func (s *Store) loadRDBFile(path string) error {
-    rdbReader, err := NewRDBReader(s.config.Dir, s.config.DBFilename)
-    if err != nil {
-        return fmt.Errorf("failed to create RDB reader: %v", err)
-    }
-    defer rdbReader.Close()
+	rdbReader, err := NewRDBReader(s.config.Dir, s.config.DBFilename)
+	if err != nil {
+		return fmt.Errorf("failed to create RDB reader: %v", err)
+	}
+	defer rdbReader.Close()
 
-    database, err := rdbReader.ReadDatabase()
-    if err != nil {
-        return fmt.Errorf("failed to load RDB data: %v", err)
-    }
+	database, err := rdbReader.ReadDatabase()
+	if err != nil {
+		return fmt.Errorf("failed to load RDB data: %v", err)
+	}
 
-    s.mux.Lock()
-    defer s.mux.Unlock()
-    
-    s.items = make(map[string]V)
-    for key, value := range database {
-        s.items[key] = V{value: value, savedTime: time.Now()}
-    }
+	s.mux.Lock()
+	defer s.mux.Unlock()
 
-    return nil
+	s.items = make(map[string]V)
+	for key, value := range database {
+		s.items[key] = V{value: value, savedTime: time.Now()}
+	}
+
+	return nil
 }
-

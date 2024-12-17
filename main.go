@@ -77,7 +77,6 @@ func NewStore(config Config) (*Store, error) {
 	return store, nil
 }
 
-
 func main() {
 	config := Config{}
 
@@ -142,39 +141,53 @@ func handleConnection(conn net.Conn, store *Store) {
 		}
 	}
 }
+
 func handleCommand(commands Value, store *Store) (Value, error) {
 	cmds := commands.Array
-	switch strings.ToUpper(cmds[0].BulkString) {
+
+	// Get command type
+	cmdType := strings.ToUpper(cmds[0].BulkString)
+
+	// Execute the command
+	var result Value
+	var err error
+
+	switch cmdType {
 	case PING:
-		return Value{Type: TypeString, String: "PONG"}, nil
+		result = Value{Type: TypeString, String: "PONG"}
 	case ECHO:
-		return Value{Type: TypeString, String: cmds[1].BulkString}, nil
+		result = Value{Type: TypeString, String: cmds[1].BulkString}
 	case SET:
 		key := cmds[1].BulkString
 		val := cmds[2].BulkString
 		if len(cmds) == 4 {
 			exp := cmds[3].Number
-			return setHandlerWithExpiry(store, key, val, uint64(exp)), nil
+			result = setHandlerWithExpiry(store, key, val, uint64(exp))
+		} else {
+			result = setHandler(store, key, val)
 		}
-		return setHandler(store, key, val), nil
 	case GET:
 		key := cmds[1].BulkString
-		return getHandler(store, key), nil
+		result = getHandler(store, key)
 	case "CONFIG":
 		if len(cmds) < 3 || strings.ToUpper(cmds[1].BulkString) != "GET" {
 			return Value{}, fmt.Errorf("invalid CONFIG command")
 		}
-		return configGetHandler(store, cmds[2].BulkString), nil
+		result = configGetHandler(store, cmds[2].BulkString)
 	case "INFO":
-		return infoComandHandler(store), nil
+		result = infoComandHandler(store)
 	case "SAVE":
-		return saveHandler(store), nil
-	case "REPLCONF":
-		return handleReplConfCommand(store, cmds[1:]), nil
-
+		result = saveHandler(store)
 	default:
 		return Value{}, fmt.Errorf("command not found")
 	}
+
+	// Propagate write commands to replicas if running as master
+	if store.replState.role == "master" && isWriteCommand(cmdType) {
+		store.propagateCommand(commands)
+	}
+
+	return result, err
 }
 
 func printValue(v Value, indent string) {
