@@ -182,6 +182,13 @@ func (s *Store) handlePSYNCCommand(replica *Replica, cmd Value) (Value, error) {
 	s.logger.Info("Received PSYNC from replica %s with offset %s", replica.ID, offset)
 
 	// Simulate creating an RDB snapshot
+	rdbData, err := s.createRDBSnapshot()
+	if err != nil {
+		return Value{}, fmt.Errorf("Error creating RDB snapshot")
+	}
+
+	s.logger.Info("RDB snapshot created %s", string(rdbData))
+
 	// Send RDB data to the replica
 
 	return Value{Type: TypeBulkString, BulkString: "CONTINUE"}, nil // Indicate incremental updates will follow
@@ -217,4 +224,48 @@ func isPSYNCCommand(v Value) bool {
 	return len(v.Array) > 0 &&
 		v.Array[0].Type == TypeBulkString &&
 		strings.ToUpper(v.Array[0].BulkString) == "PSYNC"
+}
+
+// createRDBSnapshot serializes the database into an RDB format and returns the byte slice
+func (s *Store) createRDBSnapshot() ([]byte, error) {
+	var rdbData []byte
+
+	// Write header
+	header := []byte("REDIS0012")
+	rdbData = append(rdbData, header...)
+
+	// Write key-value pairs
+	for key, v := range s.items {
+		rdbData = append(rdbData, 0x00) // Start of key-value pair marker
+
+		keyBytes, err := encodeString(key)
+		if err != nil {
+			return nil, err
+		}
+		rdbData = append(rdbData, keyBytes...)
+
+		valueBytes, err := encodeString(v.value)
+		if err != nil {
+			return nil, err
+		}
+		rdbData = append(rdbData, valueBytes...)
+	}
+
+	// Write EOF marker
+	rdbData = append(rdbData, 0xFF)
+
+	return rdbData, nil
+}
+
+// encodeString encodes a string with its length prefixed as a single byte
+func encodeString(s string) ([]byte, error) {
+	length := len(s)
+	if length > 255 { // Ensure length fits in one byte for simplicity
+		return nil, fmt.Errorf("string too long to encode: %s", s)
+	}
+
+	data := make([]byte, length+1)
+	data[0] = byte(length) // Length prefix as one byte
+	copy(data[1:], s)
+	return data, nil
 }

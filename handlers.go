@@ -79,7 +79,7 @@ func handleReplConfCommand(store *Store, args []Value) Value {
 	}
 }
 func saveHandler(store *Store) Value {
-	err := store.Save()
+	err := store.Save(store.config.DBFilename)
 	if err != nil {
 		return Value{Type: TypeString, String: "-ERR " + err.Error()}
 	}
@@ -109,11 +109,11 @@ func infoComandHandler(store *Store) Value {
 
 	return Value{Type: TypeBulkString, BulkString: info.String()}
 }
-func (s *Store) Save() error {
+func (s *Store) Save(DBFilename string) error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 
-	path := fmt.Sprintf("./%s/%s", s.config.Dir, s.config.DBFilename)
+	path := fmt.Sprintf("./%s/%s", s.config.Dir, DBFilename)
 	file, err := os.Create(path)
 	if err != nil {
 		return err
