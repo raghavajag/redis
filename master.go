@@ -6,8 +6,16 @@ import (
 	"net"
 	"strings"
 	"time"
+	"os"
 )
-
+const (
+    CMD_PSYNC = "PSYNC"
+    FULLSYNC  = "FULLSYNC"
+    CONTINUE  = "CONTINUE"
+)
+const (
+    RDB_CHUNK_SIZE = 8192
+)
 func (s *Store) startAsMaster() error {
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.replConfig.Port))
 	if err != nil {
@@ -173,25 +181,34 @@ func (s *Store) handleReplConfCommand(replica *Replica, cmd Value) (Value, error
 	return Value{Type: TypeBulkString, BulkString: "OK"}, nil
 }
 func (s *Store) handlePSYNCCommand(replica *Replica, cmd Value) (Value, error) {
-	if len(cmd.Array) < 2 {
-		return Value{}, fmt.Errorf("invalid PSYNC command from replica %s", replica.ID)
-	}
+    if len(cmd.Array) < 3 {
+        return Value{}, fmt.Errorf("invalid PSYNC command format")
+    }
 
-	offset := cmd.Array[1].BulkString // Replica's replication offset
+    // Send FULLSYNC response directly through RESP
+    fullsyncResponse := Value{
+        Type: TypeBulkString,
+        BulkString: "FULLSYNC",
+    }
+    if err := replica.writer.Write(fullsyncResponse); err != nil {
+        return Value{}, fmt.Errorf("failed to send FULLSYNC: %v", err)
+    }
 
-	s.logger.Info("Received PSYNC from replica %s with offset %s", replica.ID, offset)
+    // Send RDB file directly through socket
+    if err := s.sendRDBToReplica(replica); err != nil {
+        return Value{}, fmt.Errorf("RDB transfer failed: %v", err)
+    }
 
-	// Simulate creating an RDB snapshot
-	rdbData, err := s.createRDBSnapshot()
-	if err != nil {
-		return Value{}, fmt.Errorf("Error creating RDB snapshot")
-	}
+    // Send CONTINUE directly through RESP
+    continueCmd := Value{
+        Type: TypeBulkString,
+        BulkString: "CONTINUE",
+    }
+    if err := replica.writer.Write(continueCmd); err != nil {
+        return Value{}, fmt.Errorf("failed to send CONTINUE: %v", err)
+    }
 
-	s.logger.Info("RDB snapshot created %s", string(rdbData))
-
-	// Send RDB data to the replica
-
-	return Value{Type: TypeBulkString, BulkString: "CONTINUE"}, nil // Indicate incremental updates will follow
+    return Value{Type: TypeString, String: "OK"}, nil
 }
 
 func (s *Store) cleanupReplica(replica *Replica) {
@@ -269,3 +286,49 @@ func encodeString(s string) ([]byte, error) {
 	copy(data[1:], s)
 	return data, nil
 }
+func (s *Store) sendRDBToReplica(replica *Replica) error {
+    // Create RDB snapshot
+    if err := s.Save(); err != nil {
+        return fmt.Errorf("failed to create RDB snapshot: %v", err)
+    }
+
+    path := fmt.Sprintf("./%s/%s", s.config.Dir, s.config.DBFilename)
+    rdbFile, err := os.Open(path)
+    if err != nil {
+        return fmt.Errorf("failed to open RDB file: %v", err)
+    }
+    defer rdbFile.Close()
+
+    fileInfo, err := rdbFile.Stat()
+    if err != nil {
+        return fmt.Errorf("failed to get RDB file info: %v", err)
+    }
+
+    // Send file size as RESP integer
+    sizeCmd := Value{
+        Type: TypeBulkString,
+        BulkString: fmt.Sprintf("%d", fileInfo.Size()),
+    }
+    if err := replica.writer.Write(sizeCmd); err != nil {
+        return fmt.Errorf("failed to send size: %v", err)
+    }
+
+    // Stream raw bytes directly through socket
+    buffer := make([]byte, 8192)
+    for {
+        n, err := rdbFile.Read(buffer)
+        if err == io.EOF {
+            break
+        }
+        if err != nil {
+            return fmt.Errorf("error reading RDB chunk: %v", err)
+        }
+
+        if _, err := replica.conn.Write(buffer[:n]); err != nil {
+            return fmt.Errorf("error sending RDB chunk: %v", err)
+        }
+    }
+
+    return nil
+}
+

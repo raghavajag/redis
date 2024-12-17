@@ -42,36 +42,41 @@ const (
 
 func NewStore(config Config) (*Store, error) {
 	rdbReader, err := NewRDBReader(config.Dir, config.DBFilename)
-	if err != nil {
-		return nil, err
-	}
-	defer rdbReader.Close()
-
-	database, err := rdbReader.ReadDatabase()
-	if err != nil {
-		return nil, err
-	}
-
 	items := make(map[string]V)
-	for key, value := range database {
-		items[key] = V{value: value}
+
+	if err != nil {
+		return nil, err
+	} else if rdbReader.file != nil {
+		database, err := rdbReader.ReadDatabase()
+		if err != nil {
+			return nil, err
+		}
+
+		for key, value := range database {
+			items[key] = V{value: value}
+		}
+		rdbReader.Close()
 	}
+
 	replConfig := ReplicationConfig{
 		Port:      config.ReplicationPort,
 		ReplicaOf: config.MasterAddr,
 		ReplID:    generateReplicaID(),
 	}
+
 	store := &Store{
 		items:      items,
 		config:     config,
 		replConfig: replConfig,
 		logger:     NewLogger(true),
 	}
+
 	if err := store.initReplication(); err != nil {
 		return nil, err
 	}
 	return store, nil
 }
+
 
 func main() {
 	config := Config{}
