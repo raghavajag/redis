@@ -1,25 +1,26 @@
 package main
 
 import (
-	"fmt"
-	"time"
-	"strings"
 	"bufio"
-	"os"
 	"encoding/binary"
+	"fmt"
+	"os"
+	"strings"
+	"time"
 )
-
 
 func setHandlerWithExpiry(store *Store, key string, val string, expiry uint64) Value {
 	store.mux.Lock()
 	defer store.mux.Unlock()
+	fmt.Printf("Set Expiry key: %s val: %s\n", key, val)
+	// Update only the specific key with expiry
 	store.items[key] = V{expiry: time.Duration(expiry), savedTime: time.Now(), value: val}
 	return Value{Type: TypeString, String: "OK"}
 }
 
 func setHandler(store *Store, key string, val string) Value {
-	fmt.Printf("key: %s val: %s\n", key, val)
 	store.mux.Lock()
+	fmt.Printf("Set key: %s val: %s\n", key, val)
 	defer store.mux.Unlock()
 	store.items[key] = V{savedTime: time.Now(), value: val}
 	return Value{Type: TypeString, String: "OK"}
@@ -28,13 +29,20 @@ func setHandler(store *Store, key string, val string) Value {
 func getHandler(store *Store, key string) Value {
 	store.mux.Lock()
 	defer store.mux.Unlock()
-	val := store.items[key]
-	if time.Since(val.savedTime) > val.expiry {
-		delete(store.items, key)
-	}
-	if val.value == "" {
+
+	val, exists := store.items[key]
+	if !exists {
+		// Key does not exist in memory
 		return Value{Type: TypeNullBulkString}
 	}
+
+	// Check if the key has expired
+	if val.expiry > 0 && time.Since(val.savedTime) > val.expiry {
+		delete(store.items, key)               // Remove expired key from memory
+		return Value{Type: TypeNullBulkString} // Return null for expired keys
+	}
+
+	// Return the value if it exists and has not expired
 	return Value{Type: TypeString, String: val.value}
 }
 
@@ -57,6 +65,7 @@ func configGetHandler(store *Store, param string) Value {
 		},
 	}
 }
+
 func handleReplConfCommand(store *Store, args []Value) Value {
 	if len(args) < 2 || args[0].Type != TypeBulkString || args[1].Type != TypeBulkString {
 		return Value{Type: TypeBulkString, BulkString: "-ERR invalid REPLCONF arguments"}
@@ -78,6 +87,7 @@ func handleReplConfCommand(store *Store, args []Value) Value {
 		return Value{Type: TypeBulkString, BulkString: "-ERR unknown REPLCONF subcommand"}
 	}
 }
+
 func saveHandler(store *Store) Value {
 	err := store.Save()
 	if err != nil {
@@ -85,6 +95,7 @@ func saveHandler(store *Store) Value {
 	}
 	return Value{Type: TypeString, String: "+OK"}
 }
+
 func infoComandHandler(store *Store) Value {
 	info := strings.Builder{}
 	info.WriteString("# Replication\r\n")
@@ -109,9 +120,12 @@ func infoComandHandler(store *Store) Value {
 
 	return Value{Type: TypeBulkString, BulkString: info.String()}
 }
+
 func (s *Store) Save() error {
 	s.mux.Lock()
 	defer s.mux.Unlock()
+
+	fmt.Println("Saving current items:", s.items) // Debugging log
 
 	path := fmt.Sprintf("./%s/%s", s.config.Dir, s.config.DBFilename)
 	file, err := os.Create(path)
@@ -128,6 +142,7 @@ func (s *Store) Save() error {
 
 	return writer.Flush()
 }
+
 func (s *Store) writeRDB(w *bufio.Writer) error {
 	// Write header
 	_, err := w.Write([]byte("REDIS0012"))
@@ -147,6 +162,7 @@ func (s *Store) writeRDB(w *bufio.Writer) error {
 	_, err = w.Write([]byte{0xFF})
 	return err
 }
+
 func (s *Store) writeKeyValue(w *bufio.Writer, key string, v V) error {
 	// Write key
 	_, err := w.Write([]byte{0x00})
@@ -166,7 +182,9 @@ func (s *Store) writeKeyValue(w *bufio.Writer, key string, v V) error {
 
 	return nil
 }
+
 func (s *Store) writeString(w *bufio.Writer, str string) error {
+	fmt.Printf("Writing string %s\n", str)
 	// Write string length
 	size := len(str)
 	err := binary.Write(w, binary.BigEndian, uint8(size))

@@ -42,22 +42,29 @@ const (
 
 func NewStore(config Config) (*Store, error) {
 	rdbReader, err := NewRDBReader(config.Dir, config.DBFilename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create RDB reader: %v", err)
+	}
+	defer rdbReader.Close()
+
 	items := make(map[string]V)
 
-	if err != nil {
-		return nil, err
-	} else if rdbReader.file != nil {
+	if rdbReader.file != nil {
 		database, err := rdbReader.ReadDatabase()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read database: %v", err)
 		}
 
+		// Populate items map with data from RDB
 		for key, value := range database {
-			items[key] = V{value: value}
+			items[key] = V{
+				value:     value,
+				savedTime: time.Now(),
+			}
 		}
-		rdbReader.Close()
 	}
 
+	// Initialize replication config
 	replConfig := ReplicationConfig{
 		Port:      config.ReplicationPort,
 		ReplicaOf: config.MasterAddr,
@@ -74,6 +81,7 @@ func NewStore(config Config) (*Store, error) {
 	if err := store.initReplication(); err != nil {
 		return nil, err
 	}
+
 	return store, nil
 }
 
@@ -117,9 +125,8 @@ func handleConnection(conn net.Conn, store *Store) {
 
 	for {
 		commands, err := respReader.Read()
-		fmt.Println("Commands:")
-		printValue(commands, "  ")
-
+		// fmt.Println("Commands:")
+		// printValue(commands, "  ")
 		if err != nil {
 			if err == io.EOF {
 				fmt.Println("Connection closed")
@@ -129,8 +136,8 @@ func handleConnection(conn net.Conn, store *Store) {
 			return
 		}
 		result, err := handleCommand(commands, store)
-		fmt.Println("Response:")
-		printValue(result, "  ")
+		// fmt.Println("Response:")
+		// printValue(result, "  ")
 		if err != nil {
 			fmt.Printf("Failed to handle command %s", err.Error())
 		}
