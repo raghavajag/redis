@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,15 +165,27 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 		result = Value{Type: TypeString, String: "PONG"}
 	case ECHO:
 		result = Value{Type: TypeString, String: cmds[1].BulkString}
+
 	case SET:
 		key := cmds[1].BulkString
 		val := cmds[2].BulkString
+
 		if len(cmds) == 4 {
-			exp := cmds[3].Number
+			exp, err := strconv.Atoi(cmds[3].BulkString)
+			if err != nil {
+				return Value{}, fmt.Errorf("invalid expiry value: %s", cmds[3].BulkString)
+			}
+			result = setHandlerWithExpiry(store, key, val, uint64(exp))
+		} else if len(cmds) == 5 && strings.ToUpper(cmds[3].BulkString) == "EX" {
+			exp, err := strconv.Atoi(cmds[4].BulkString) // Convert bulk string to integer
+			if err != nil {
+				return Value{}, fmt.Errorf("invalid expiry value: %s", cmds[4].BulkString)
+			}
 			result = setHandlerWithExpiry(store, key, val, uint64(exp))
 		} else {
 			result = setHandler(store, key, val)
 		}
+
 	case GET:
 		key := cmds[1].BulkString
 		result = getHandler(store, key)

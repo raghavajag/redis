@@ -12,9 +12,17 @@ import (
 func setHandlerWithExpiry(store *Store, key string, val string, expiry uint64) Value {
 	store.mux.Lock()
 	defer store.mux.Unlock()
-	fmt.Printf("Set Expiry key: %s val: %s\n", key, val)
-	// Update only the specific key with expiry
-	store.items[key] = V{expiry: time.Duration(expiry), savedTime: time.Now(), value: val}
+
+	duration := time.Duration(expiry) * time.Second
+
+	store.items[key] = V{
+		expiry:    duration,
+		savedTime: time.Now(),
+		value:     val,
+	}
+
+	fmt.Printf("Storing key: %s with value: %s and expiry: %v\n", key, val, duration)
+
 	return Value{Type: TypeString, String: "OK"}
 }
 
@@ -35,7 +43,7 @@ func getHandler(store *Store, key string) Value {
 		// Key does not exist in memory
 		return Value{Type: TypeNullBulkString}
 	}
-
+	fmt.Printf("%v\n", val.value)
 	// Check if the key has expired
 	if val.expiry > 0 && time.Since(val.savedTime) > val.expiry {
 		delete(store.items, key)               // Remove expired key from memory
