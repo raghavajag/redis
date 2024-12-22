@@ -32,6 +32,9 @@ type Store struct {
 	replConfig ReplicationConfig
 	replState  *ReplicationState
 	logger     *Logger
+	propQueue  *PropagationQueue
+	ackTracker *AckTracker
+	cmdOffset  int64
 }
 
 const (
@@ -77,6 +80,14 @@ func NewStore(config Config) (*Store, error) {
 		config:     config,
 		replConfig: replConfig,
 		logger:     NewLogger(true),
+		propQueue: &PropagationQueue{
+			commands: make(chan *CommandEntry, 10000),
+			done:     make(chan struct{}),
+		},
+		ackTracker: &AckTracker{
+			entries: make(map[int64]*CommandEntry),
+		},
+		cmdOffset: 0,
 	}
 
 	if err := store.initReplication(); err != nil {
@@ -204,7 +215,7 @@ func handleCommand(commands Value, store *Store) (Value, error) {
 
 	// Propagate write commands to replicas if running as master
 	if store.replState.role == "master" && isWriteCommand(cmdType) {
-		store.propagateCommand(commands)
+		store.queueCommandForPropagation(commands)
 	}
 
 	return result, err

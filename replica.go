@@ -37,15 +37,15 @@ type Replica struct {
 
 func (s *Store) initReplication() error {
 	s.replState = &ReplicationState{
-		replicas: make(map[string]*Replica),
-		role:     s.config.Role,
-		offset:   0,
+		role:   s.config.Role,
+		offset: 0,
 	}
 	if s.replConfig.ReplicaOf != "" {
 		s.replState.role = "replica"
 		return s.startAsReplica()
 	}
-
+	go s.startPropagationWorker()
+	s.replState.replicas = make(map[string]*Replica)
 	s.replState.role = "master"
 	return s.startAsMaster()
 }
