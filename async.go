@@ -43,7 +43,7 @@ func (s *Store) propagateCommandToReplicas(entry *CommandEntry) {
 			select {
 			case r.outgoing <- entry.command:
 				s.logger.Info("Propagated command to replica %s at offset %d", r.ID, entry.offset)
-				entry.waitingACKs[r.ID] = false // Track ACK status
+				entry.waitingACKs[r.ID] = false // Initialize ACK status as false
 			default:
 				s.logger.Error("Failed to propagate command to replica %s: channel full", r.ID)
 			}
@@ -58,7 +58,7 @@ func (s *Store) propagateCommandToReplicas(entry *CommandEntry) {
 
 func (s *Store) queueCommandForPropagation(cmd Value) *CommandEntry {
 	s.mux.Lock()
-	offset := s.cmdOffset
+	offset := s.cmdOffset + 1
 	s.cmdOffset++
 	s.mux.Unlock()
 
@@ -70,6 +70,19 @@ func (s *Store) queueCommandForPropagation(cmd Value) *CommandEntry {
 		done:        make(chan struct{}),
 	}
 
+	// Initialize waitingACKs for all connected replicas
+	s.replState.mux.RLock()
+	for id := range s.replState.replicas {
+		entry.waitingACKs[id] = false
+	}
+	s.replState.mux.RUnlock()
+
+	// Add entry to AckTracker
+	s.ackTracker.mux.Lock()
+	s.ackTracker.entries[offset] = entry
+	s.ackTracker.mux.Unlock()
+
+	// Enqueue command for propagation
 	select {
 	case s.propQueue.commands <- entry:
 		s.logger.Info("Queued command for propagation, offset: %d", offset)

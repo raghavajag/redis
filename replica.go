@@ -88,33 +88,36 @@ func (s *Store) startAsReplica() error {
 }
 
 func (s *Store) sendPSYNCCommand(replica *Replica) error {
-	// Send PSYNC command directly through RESP
+	// Send PSYNC command with current replication offset
 	psyncCmd := Value{
 		Type: TypeArray,
 		Array: []Value{
 			{Type: TypeBulkString, BulkString: CMD_PSYNC},
-			{Type: TypeBulkString, BulkString: "?"},
-			{Type: TypeBulkString, BulkString: "-1"},
+			{Type: TypeBulkString, BulkString: s.replConfig.ReplID},                   // Request new replication ID
+			{Type: TypeBulkString, BulkString: strconv.FormatInt(replica.offset, 10)}, // Current offset
 		},
 	}
 
+	s.logger.Info("Sending PSYNC command to master with offset %d", replica.offset)
 	if err := replica.writer.Write(psyncCmd); err != nil {
-		return fmt.Errorf("failed to send PSYNC: %v", err)
+		return fmt.Errorf("failed to send PSYNC command: %v", err)
 	}
 
-	// Read response directly
+	// Read master's response
 	response, err := replica.reader.Read()
 	if err != nil {
 		return fmt.Errorf("failed to read PSYNC response: %v", err)
 	}
 
-	if !isFullSyncResponse(response) {
-		return fmt.Errorf("unexpected response to PSYNC: %v", response)
-	}
-
-	// Receive RDB file
-	if err := s.receiveRDBFromMaster(replica); err != nil {
-		return fmt.Errorf("RDB transfer failed: %v", err)
+	switch response.BulkString {
+	case FULLSYNC:
+		s.logger.Info("Received FULLSYNC response from master")
+		return s.receiveRDBFromMaster(replica) // Perform full synchronization
+	case CONTINUE:
+		s.logger.Info("Received CONTINUE response from master")
+		go s.processIncomingCommands(replica) // Start processing incremental updates
+	default:
+		return fmt.Errorf("unexpected PSYNC response: %v", response)
 	}
 
 	return nil
@@ -205,7 +208,7 @@ func (s *Store) receiveCommandsFromMaster(replica *Replica) {
 		}
 
 		if len(command.Array) == 0 { // Validate received command
-			s.logger.Error("Received invalid or empty command from master %v\n", command)
+			// s.logger.Error("Received invalid or empty command from master %v\n", command)
 			continue // Skip invalid commands
 		}
 
@@ -222,25 +225,34 @@ func (s *Store) receiveCommandsFromMaster(replica *Replica) {
 
 // Goroutine to process incoming commands asynchronously.
 func (s *Store) processIncomingCommands(replica *Replica) {
-	for cmd := range replica.incoming { // Listen for commands on the incoming channel.
+	for cmd := range replica.incoming {
 		s.logger.Info("Processing command from master: %v", cmd)
 
-		// Process the command and log the result or error
-		result, err := handleCommand(cmd, s)
+		// Process the command
+		_, err := handleCommand(cmd, s)
 		if err != nil {
 			s.logger.Error("Error processing command from master: %v", err)
 			continue
 		}
 
-		s.logger.Info("Processed command successfully. Result: %v", result)
+		// Update replication offset
+		replica.offset++
+		s.logger.Info("Updated replication offset to %d", replica.offset)
 
 		// Send acknowledgment back to the master
-		ackCmd := Value{Type: TypeBulkString, BulkString: "ACK"}
+		ackCmd := Value{
+			Type: TypeArray,
+			Array: []Value{
+				{Type: TypeBulkString, BulkString: "REPLCONF"},
+				{Type: TypeBulkString, BulkString: "ACK"},
+				{Type: TypeBulkString, BulkString: strconv.FormatInt(replica.offset, 10)},
+			},
+		}
 		select {
 		case replica.outgoing <- ackCmd:
-			s.logger.Info("Queued acknowledgment for master")
+			s.logger.Info("Sent acknowledgment to master with offset %d", replica.offset)
 		default:
-			s.logger.Error("Outgoing response queue is full; dropping acknowledgment")
+			s.logger.Error("Failed to send acknowledgment; outgoing queue is full")
 		}
 	}
 }

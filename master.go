@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -82,7 +83,7 @@ func (s *Store) receiveCommandsFromReplica(replica *Replica) {
 		}
 
 		if len(command.Array) == 0 { // Validate received command
-			s.logger.Error("Received invalid or empty command from replica %s", replica.ID)
+			// s.logger.Error("Received invalid or empty command from replica %s", replica.ID)
 			continue // Skip invalid commands
 		}
 
@@ -90,7 +91,7 @@ func (s *Store) receiveCommandsFromReplica(replica *Replica) {
 
 		select {
 		case replica.incoming <- command: // Enqueue command into the incoming channel
-			s.logger.Info("Queued command from replica %s for processing", replica.ID)
+			// s.logger.Info("Queued command from replica %s for processing", replica.ID)
 		default:
 			s.logger.Error("Incoming command queue is full for replica %s; dropping command", replica.ID)
 		}
@@ -167,17 +168,62 @@ func (s *Store) handleReplConfCommand(replica *Replica, cmd Value) (Value, error
 	}
 
 	subcommand := strings.ToLower(cmd.Array[1].BulkString)
-
 	switch subcommand {
+	case "ack":
+		if len(cmd.Array) < 3 {
+			return Value{}, fmt.Errorf("missing offset in REPLCONF ACK from replica %s", replica.ID)
+		}
+
+		// Parse and validate offset
+		ackOffset, err := strconv.ParseInt(cmd.Array[2].BulkString, 10, 64)
+		if err != nil {
+			return Value{}, fmt.Errorf("invalid ACK offset value: %v", err)
+		}
+
+		// Update replica's last ACK timestamp and offset
+		replica.lastACK = time.Now()
+		replica.offset = ackOffset
+		s.logger.Info("Received ACK from replica %s at offset %d", replica.ID, ackOffset)
+
+		// Update AckTracker for this command
+		s.ackTracker.mux.RLock()
+		entry, exists := s.ackTracker.entries[ackOffset]
+		s.ackTracker.mux.RUnlock()
+
+		if !exists {
+			s.logger.Error("No CommandEntry found for ACK at offset %d from replica %s", ackOffset, replica.ID)
+			return Value{Type: TypeBulkString, BulkString: "OK"}, nil
+		}
+
+		// Mark this replica as having acknowledged the command
+		entry.waitingACKs[replica.ID] = true
+
+		// Check if all replicas have acknowledged this command
+		allAcked := true
+		for _, acked := range entry.waitingACKs {
+			if !acked {
+				allAcked = false
+				break
+			}
+		}
+
+		if allAcked {
+			close(entry.done) // Mark as complete
+			s.logger.Info("All replicas acknowledged command at offset %d", ackOffset)
+
+			// Cleanup completed entry from AckTracker
+			s.ackTracker.mux.Lock()
+			delete(s.ackTracker.entries, ackOffset)
+			s.ackTracker.mux.Unlock()
+		}
+
 	case "listening-port":
 		if len(cmd.Array) < 3 {
 			return Value{}, fmt.Errorf("missing port in REPLCONF listening-port from replica %s", replica.ID)
 		}
 		port := cmd.Array[2].BulkString
 		s.logger.Info("Replica %s reported listening port: %s", replica.ID, port)
-	case "ack":
-		replica.lastACK = time.Now()
-		s.logger.Info("Received ACK from replica %s at offset %d", replica.ID, replica.offset)
+
 	default:
 		return Value{}, fmt.Errorf("unknown REPLCONF subcommand '%s' from replica %s", subcommand, replica.ID)
 	}
@@ -190,27 +236,33 @@ func (s *Store) handlePSYNCCommand(replica *Replica, cmd Value) (Value, error) {
 		return Value{}, fmt.Errorf("invalid PSYNC command format")
 	}
 
-	// Send FULLSYNC response directly through RESP
-	fullsyncResponse := Value{
-		Type:       TypeBulkString,
-		BulkString: "FULLSYNC",
-	}
-	if err := replica.writer.Write(fullsyncResponse); err != nil {
-		return Value{}, fmt.Errorf("failed to send FULLSYNC: %v", err)
+	replicaOffset, err := strconv.ParseInt(cmd.Array[2].BulkString, 10, 64)
+	if err != nil {
+		return Value{}, fmt.Errorf("invalid offset in PSYNC command")
 	}
 
-	// Send RDB file directly through socket
-	if err := s.sendRDBToReplica(replica); err != nil {
-		return Value{}, fmt.Errorf("RDB transfer failed: %v", err)
-	}
-
-	// Send CONTINUE directly through RESP
-	continueCmd := Value{
-		Type:       TypeBulkString,
-		BulkString: "CONTINUE",
-	}
-	if err := replica.writer.Write(continueCmd); err != nil {
-		return Value{}, fmt.Errorf("failed to send CONTINUE: %v", err)
+	if replicaOffset == -1 || replicaOffset < s.replState.offset {
+		// Perform FULLSYNC
+		fullsyncResponse := Value{
+			Type:       TypeBulkString,
+			BulkString: FULLSYNC,
+		}
+		if err := replica.writer.Write(fullsyncResponse); err != nil {
+			return Value{}, fmt.Errorf("failed to send FULLSYNC: %v", err)
+		}
+		if err := s.sendRDBToReplica(replica); err != nil {
+			return Value{}, fmt.Errorf("RDB transfer failed: %v", err)
+		}
+	} else {
+		// Perform CONTINUE
+		continueResponse := Value{
+			Type:       TypeBulkString,
+			BulkString: CONTINUE,
+		}
+		if err := replica.writer.Write(continueResponse); err != nil {
+			return Value{}, fmt.Errorf("failed to send CONTINUE: %v", err)
+		}
+		go s.sendMissedCommands(replica, replicaOffset)
 	}
 
 	return Value{Type: TypeString, String: "OK"}, nil
@@ -366,4 +418,19 @@ func isWriteCommand(cmdType string) bool {
 		"HSET":   true,
 	}
 	return writeCommands[cmdType]
+}
+
+func (s *Store) sendMissedCommands(replica *Replica, offset int64) {
+	s.replState.mux.RLock()
+	defer s.replState.mux.RUnlock()
+
+	for _, entry := range s.ackTracker.entries {
+		if entry.offset > offset {
+			if err := replica.writer.Write(entry.command); err != nil {
+				s.logger.Error("Failed to send missed command to replica %s: %v", replica.ID, err)
+				return
+			}
+			s.logger.Info("Sent missed command to replica %s at offset %d", replica.ID, entry.offset)
+		}
+	}
 }

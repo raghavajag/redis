@@ -19,7 +19,6 @@ func NewRDBReader(dir, filename string) (*RDBReader, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Printf("File does not exist: %s\n", path)
 			return &RDBReader{file: nil, reader: nil}, nil // File doesn't exist, return empty reader
 		}
 		return nil, err
@@ -35,6 +34,7 @@ func (r *RDBReader) Close() {
 		r.file.Close()
 	}
 }
+
 func (r *RDBReader) readHeader() error {
 	if r.file == nil {
 		return nil // Empty database
@@ -52,123 +52,101 @@ func (r *RDBReader) readHeader() error {
 
 	return nil
 }
+
 func (r *RDBReader) ReadDatabase() (map[string]string, error) {
 	if r.file == nil {
 		return make(map[string]string), nil // Empty database
 	}
+
 	err := r.readHeader()
 	if err != nil {
-		fmt.Printf("Error reading header: %v\n", err)
-		return nil, err
+		return nil, fmt.Errorf("error reading RDB header: %v", err)
 	}
-	fmt.Println("Header read successfully")
 
 	database := make(map[string]string)
 
 	for {
 		b, err := r.reader.ReadByte()
 		if err != nil {
-			return nil, err
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("error reading RDB file: %v", err)
 		}
-		fmt.Printf("Read byte: 0x%02X\n", b)
+
 		switch b {
-		case 0xFE: // database selector
-			fmt.Println("Database selector found")
-			dbNum, err := r.readSize()
-			if err != nil {
-				fmt.Printf("Error reading database number: %v\n", err)
-				return nil, err
+		case 0xFE: // Database selector
+			if _, err := r.readSize(); err != nil {
+				return nil, fmt.Errorf("error reading database selector: %v", err)
 			}
-			fmt.Printf("Database number: %d\n", dbNum)
-		case 0xFA: // meta data key value
-			fmt.Println("Metadata entry found")
-			metaKey, err := r.readString()
-			if err != nil {
-				fmt.Printf("Error reading metadata key: %v\n", err)
-				return nil, err
+		case 0xFA: // Metadata key-value pair
+			if _, err := r.readString(); err != nil {
+				return nil, fmt.Errorf("error reading metadata key: %v", err)
 			}
-			metaValue, err := r.readString()
-			if err != nil {
-				fmt.Printf("Error reading metadata value: %v\n", err)
-				return nil, err
+			if _, err := r.readString(); err != nil {
+				return nil, fmt.Errorf("error reading metadata value: %v", err)
 			}
-			fmt.Printf("Metadata: %s = %s\n", metaKey, metaValue)
-		case 0xFB: // hash table size
-			fmt.Println("Hash table size info found")
-			keySize, err := r.readSize()
-			if err != nil {
-				fmt.Printf("Error reading key hash table size: %v\n", err)
-				return nil, err
+		case 0xFB: // Hash table size
+			if _, err := r.readSize(); err != nil {
+				return nil, fmt.Errorf("error reading key hash table size: %v", err)
 			}
-			expireSize, err := r.readSize()
-			if err != nil {
-				fmt.Printf("Error reading expire hash table size: %v\n", err)
-				return nil, err
+			if _, err := r.readSize(); err != nil {
+				return nil, fmt.Errorf("error reading expire hash table size: %v", err)
 			}
-			fmt.Printf("Hash table sizes - Keys: %d, Expires: %d\n", keySize, expireSize)
-		case 0x00: // start of key value; load into db
-			fmt.Println("Start of key-value pair")
+		case 0x00: // Key-value pair
 			key, err := r.readString()
 			if err != nil {
-				fmt.Printf("Error reading key: %v\n", err)
-				return nil, err
+				return nil, fmt.Errorf("error reading key: %v", err)
 			}
 			value, err := r.readString()
 			if err != nil {
-				fmt.Printf("Error reading value: %v\n", err)
-				return nil, err
+				return nil, fmt.Errorf("error reading value: %v", err)
 			}
-			fmt.Printf("Read key-value pair: %s = %s\n", key, value)
 			database[key] = value
-
-		case 0xFF: // EOF
-			fmt.Println("End of file marker found")
+		case 0xFF: // End of file marker
 			return database, nil
 		default:
-			return nil, fmt.Errorf("unexpected byte: 0x%02X", b)
+			return nil, fmt.Errorf("unexpected byte in RDB file: 0x%02X", b)
 		}
 	}
+
+	return database, fmt.Errorf("unexpected end of RDB file")
 }
+
 func (r *RDBReader) readString() (string, error) {
 	b, err := r.reader.ReadByte()
 	if err != nil {
 		return "", err
 	}
 
-	fmt.Printf("String encoding byte: 0x%02X\n", b)
-
-	if b>>6 != 3 {
-		// Standard string encoding
+	if b>>6 != 3 { // Standard string encoding
 		r.reader.UnreadByte()
 		size, err := r.readSize()
 		if err != nil {
 			return "", err
 		}
-		fmt.Printf("String size: %d\n", size)
 
 		data := make([]byte, size)
-		_, err = io.ReadFull(r.reader, data)
-		if err != nil {
+		if _, err = io.ReadFull(r.reader, data); err != nil {
 			return "", err
 		}
 		return string(data), nil
 	}
 
-	// Special encoding
-	switch b & 0x3F {
-	case 0: // 8 bit integer
+	switch b & 0x3F { // Special encoding cases
+	case 0: // 8-bit integer
 		intVal, err := r.reader.ReadByte()
 		if err != nil {
 			return "", err
 		}
 		return strconv.Itoa(int(intVal)), nil
-	case 1: // 16 bit integer
+	case 1: // 16-bit integer
 		intVal, err := r.readUint16()
 		if err != nil {
 			return "", err
 		}
 		return strconv.Itoa(int(intVal)), nil
-	case 2: // 32 bit integer
+	case 2: // 32-bit integer
 		intVal, err := r.readUint32()
 		if err != nil {
 			return "", err
@@ -178,6 +156,7 @@ func (r *RDBReader) readString() (string, error) {
 		return "", fmt.Errorf("unsupported special string encoding: 0x%02X", b)
 	}
 }
+
 func (r *RDBReader) readUint16() (uint16, error) {
 	buf := make([]byte, 2)
 	_, err := io.ReadFull(r.reader, buf)
@@ -208,12 +187,9 @@ func (r *RDBReader) readSize() (uint64, error) {
 		return 0, err
 	}
 
-	fmt.Printf("Size encoding byte: 0x%02X\n", b)
-
 	switch b >> 6 {
 	case 0:
 		size := uint64(b & 0x3F)
-		fmt.Printf("6-bit size: %d\n", size)
 		return size, nil
 	case 1:
 		next, err := r.reader.ReadByte()
@@ -221,7 +197,6 @@ func (r *RDBReader) readSize() (uint64, error) {
 			return 0, err
 		}
 		size := (uint64(b&0x3F) << 8) | uint64(next)
-		fmt.Printf("14-bit size: %d\n", size)
 		return size, nil
 	case 2:
 		buf := make([]byte, 4)
@@ -230,7 +205,6 @@ func (r *RDBReader) readSize() (uint64, error) {
 			return 0, err
 		}
 		size := uint64(binary.BigEndian.Uint32(buf))
-		fmt.Printf("32-bit size: %d\n", size)
 		return size, nil
 	case 3:
 		// This is a special encoding
@@ -240,3 +214,4 @@ func (r *RDBReader) readSize() (uint64, error) {
 		return 0, fmt.Errorf("invalid size encoding")
 	}
 }
+

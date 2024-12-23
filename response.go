@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"strconv"
 )
@@ -34,6 +33,7 @@ type RESPReader struct {
 func NewRESPReader(reader io.Reader) *RESPReader {
 	return &RESPReader{reader: bufio.NewReader(reader)}
 }
+
 func (v Value) Marshal() []byte {
 	switch v.Type {
 	case TypeArray:
@@ -48,6 +48,7 @@ func (v Value) Marshal() []byte {
 		return []byte{}
 	}
 }
+
 func (v Value) marshalString() []byte {
 	var bytes []byte
 	bytes = append(bytes, STRING)
@@ -55,6 +56,7 @@ func (v Value) marshalString() []byte {
 	bytes = append(bytes, '\r', '\n')
 	return bytes
 }
+
 func (v Value) marshalBulkString() []byte {
 	var bytes []byte
 	bytes = append(bytes, BULK_STRING)
@@ -91,6 +93,7 @@ func (r *RESPReader) Read() (Value, error) {
 		return Value{}, nil
 	}
 }
+
 func (r *RESPReader) readBulkString() (Value, error) {
 	v := Value{}
 	v.Type = TypeBulkString
@@ -110,10 +113,12 @@ func (r *RESPReader) readBulkString() (Value, error) {
 	}
 	return v, nil
 }
+
 func (r *RESPReader) passCRLF() error {
 	_, _, err := r.readLine()
 	return err
 }
+
 func (r *RESPReader) readArray() (Value, error) {
 	v := Value{}
 	v.Type = TypeArray
@@ -134,7 +139,6 @@ func (r *RESPReader) readArray() (Value, error) {
 
 func (r *RESPReader) readInteger() (int, int, error) {
 	line, n, err := r.readLine()
-	fmt.Printf("From Read Integer Line: %s\n", line)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -144,6 +148,7 @@ func (r *RESPReader) readInteger() (int, int, error) {
 	}
 	return int(i64), n, nil
 }
+
 func (r *RESPReader) readLine() ([]byte, int, error) {
 	line := make([]byte, 0)
 	n := 0
@@ -171,11 +176,13 @@ func NewRESPWriter(writer io.Writer) *RESPWriter {
 		writer: bufio.NewWriter(writer),
 	}
 }
+
 func (w *RESPWriter) Write(v Value) error {
-	var bytes = v.Marshal()
+	bytes := v.Marshal()
 	_, err := w.writer.Write(bytes)
 	if err != nil {
 		return err
 	}
 	return w.writer.Flush()
 }
+
