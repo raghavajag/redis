@@ -28,7 +28,7 @@ make run-master
 ### Running as Replica
 ```bash
 ./build/redis-clone -role replica -master localhost:6380 -port 5379 -dbfilename "replica_1.rdb"
-./build/redis-clone -role replica -master localhost:6380 -port 5380 -dbfilename "replica_2.rdb" 
+./build/redis-clone -role replica -master localhost:6380 -port 5380 -dbfilename "replica_2.rdb"
 or
 make run-replica
 make run-replicas (multiple replicas)
@@ -59,3 +59,13 @@ make run-replicas (multiple replicas)
 - ACK-based command tracking
 - Replica offset management
 - Command buffering using channels
+
+
+### Todo
+- [ ] Setup basic Raft node structure
+- [ ] Election Timer Implementation
+- [ ] Leader Election
+- [ ] Log Replication
+- [ ] Consensus Logic
+- [ ] Persistent State Storage
+- [ ] Log Compaction
