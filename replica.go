@@ -13,7 +13,6 @@ import (
 type ReplicationConfig struct {
 	Port      int    // Replication listening port
 	ReplicaOf string // Master host:port if this is a replica
-	ReplID    string // Unique replication ID
 }
 
 type ReplicationState struct {
@@ -93,7 +92,7 @@ func (s *Store) sendPSYNCCommand(replica *Replica) error {
 		Type: TypeArray,
 		Array: []Value{
 			{Type: TypeBulkString, BulkString: CMD_PSYNC},
-			{Type: TypeBulkString, BulkString: s.replConfig.ReplID},                   // Request new replication ID
+			{Type: TypeBulkString, BulkString: replica.ID},                            // Use replica.ID instead of ReplID
 			{Type: TypeBulkString, BulkString: strconv.FormatInt(replica.offset, 10)}, // Current offset
 		},
 	}
@@ -127,8 +126,11 @@ func isFullSyncResponse(v Value) bool {
 	return v.Type == TypeBulkString && v.BulkString == FULLSYNC
 }
 
-func generateReplicaID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+func (s *Store) generateReplicaID() string {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.replicaCounter++
+	return fmt.Sprintf("replica_%d", s.replicaCounter)
 }
 
 func (s *Store) performHandshake(replica *Replica) error {

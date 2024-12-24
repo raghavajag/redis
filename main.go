@@ -26,15 +26,16 @@ type V struct {
 	value     string
 }
 type Store struct {
-	items      map[string]V
-	mux        sync.Mutex
-	config     Config
-	replConfig ReplicationConfig
-	replState  *ReplicationState
-	logger     *Logger
-	propQueue  *PropagationQueue
-	ackTracker *AckTracker
-	cmdOffset  int64
+	items          map[string]V
+	mux            sync.Mutex
+	config         Config
+	replConfig     ReplicationConfig
+	replState      *ReplicationState
+	logger         *Logger
+	propQueue      *PropagationQueue
+	ackTracker     *AckTracker
+	cmdOffset      int64
+	replicaCounter int
 }
 
 const (
@@ -72,7 +73,6 @@ func NewStore(config Config) (*Store, error) {
 	replConfig := ReplicationConfig{
 		Port:      config.ReplicationPort,
 		ReplicaOf: config.MasterAddr,
-		ReplID:    generateReplicaID(),
 	}
 
 	store := &Store{
@@ -87,7 +87,8 @@ func NewStore(config Config) (*Store, error) {
 		ackTracker: &AckTracker{
 			entries: make(map[int64]*CommandEntry),
 		},
-		cmdOffset: 0,
+		cmdOffset:      0,
+		replicaCounter: 0,
 	}
 
 	if err := store.initReplication(); err != nil {

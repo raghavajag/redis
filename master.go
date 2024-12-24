@@ -44,7 +44,7 @@ func (s *Store) acceptReplicas(listener net.Listener) {
 }
 
 func (s *Store) handleReplicaConnection(conn net.Conn) {
-	replicaID := generateReplicaID()
+	replicaID := s.generateReplicaID()
 	replica := &Replica{
 		ID:       replicaID,
 		incoming: make(chan Value, 1000), // Buffered channel for incoming commands
